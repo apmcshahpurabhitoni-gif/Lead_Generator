@@ -5,19 +5,14 @@ import os
 from bot import create_application
 from database import Database
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
 
 async def run_bot() -> None:
     db = Database()
     app = create_application(db)
-
     await app.initialize()
     await app.start()
     await app.updater.start_polling(drop_pending_updates=True)
-
     try:
         while True:
             await asyncio.sleep(3600)
