@@ -31,9 +31,9 @@ async def lifespan(app: FastAPI):
     await bot.bot.set_webhook(
         url=f"{base_url}/telegram/webhook/{secret}",
         secret_token=secret,
-        allowed_updates=Update.ALL_TYPES,
+        allowed_updates=["message", "callback_query"],
         max_connections=5,
-        drop_pending_updates=True,
+        drop_pending_updates=False,
     )
     app.state.bot = bot
     app.state.db = db
