@@ -4,6 +4,7 @@ from typing import Any
 from urllib.parse import urljoin, urlparse
 from urllib.robotparser import RobotFileParser
 
+import httpx
 from bs4 import BeautifulSoup
 
 from discovery import normalize_website, request
@@ -41,10 +42,16 @@ async def robots_allowed(website: str, target: str) -> bool:
         try:
             response = await request("website", "GET", robots_url, timeout=10)
             parser = RobotFileParser(); parser.set_url(robots_url); parser.parse(response.text.splitlines()); _robots_cache[host_key] = parser
+        except httpx.HTTPStatusError as exc:
+            # A missing robots.txt means there are no robots rules to apply.
+            if exc.response is not None and exc.response.status_code == 404:
+                _robots_cache[host_key] = RobotFileParser()
+            else:
+                _robots_cache[host_key] = None
         except Exception:
             _robots_cache[host_key] = None
     parser = _robots_cache[host_key]
-    return bool(parser and parser.can_fetch("LeadHunter/1.0", target))
+    return True if parser is not None and not parser.default_entry and not parser.entries else bool(parser and parser.can_fetch("LeadHunter", target))
 
 
 async def research_business(business: dict[str, Any]) -> dict[str, Any]:
