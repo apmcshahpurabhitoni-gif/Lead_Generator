@@ -1,75 +1,83 @@
-# LeadHunter 🚀
+# 🚀 LeadHunter
 
-A simple personal lead-intelligence system operated through Telegram, with a small private dashboard for history and statistics.
+A small personal lead-intelligence system operated mainly through Telegram.
 
 ## Locked scope
 
-- Telegram is the primary operating interface.
-- Small private dashboard for daily history/statistics.
-- Supabase stores businesses, research, activities, Telegram events, follow-ups, and daily statistics.
-- Ollama Cloud/Gemma generates explanations and WhatsApp message drafts.
+- Telegram is the primary interface.
+- Koyeb Web Service + Telegram webhook keeps the bot online without a local PC.
+- Supabase stores businesses, research, activities, Telegram events, follow-ups, deals, jobs and daily statistics.
+- Ollama Cloud/Gemma creates explanations and WhatsApp drafts only.
 - WhatsApp/email are not sent or tracked by LeadHunter.
 - Calls are manually recorded through Telegram.
-- Every important LeadHunter action is logged.
-- Discovery uses compliant/allowed APIs or public sources only; no Google/Maps HTML scraping or CAPTCHA bypass.
-- Per-source budgets, delays, caching and backoff are mandatory before a real provider is connected.
+- The dashboard is a small private history/statistics page at `/dashboard`.
+- Discovery uses OpenStreetMap/Overpass for real business candidates. Coverage is incomplete and is not a replacement for Google Maps.
+- Website research respects `robots.txt`, limits pages/bytes, caches robots rules in memory, rate-limits requests and backs off on 429s.
 
 ## Files
 
-- `main.py` — runtime entry point
-- `bot.py` — Telegram interface and user actions
-- `discovery.py` — discovery source interface and rate controls
-- `research.py` — website research and audit
-- `scoring.py` — deterministic scoring and service matching
-- `ai.py` — Ollama Cloud/Gemma integration
-- `database.py` — Supabase data access
-- `scheduler.py` — lightweight scheduled reminders
-- `dashboard.py` — minimal dashboard
-- `schema.sql` — Supabase schema
-- `requirements.txt` — Python dependencies
-- `.env.example` — required environment variable names
-- `render.yaml` — deployment configuration
+- `main.py` — FastAPI app, Telegram webhook and lifecycle
+- `bot.py` — Telegram commands, buttons, statuses, follow-ups and deals
+- `discovery.py` — Nominatim city lookup + Overpass business discovery + request budgets
+- `research.py` — small robots-aware website audit
+- `scoring.py` — deterministic opportunity scoring/service matching
+- `ai.py` — Ollama Cloud/Gemma
+- `database.py` — all Supabase access
+- `dashboard.py` — minimal private dashboard
+- `schema.sql` — database schema
+- `requirements.txt` — runtime dependencies
+- `Procfile` — Koyeb buildpack start command
+- `.python-version` — Python runtime
 
-## Important deployment note
+## Supabase
 
-A free Render web service is not a reliable permanent worker for Telegram long-polling. The code therefore keeps Telegram, dashboard/API, and scheduling concerns separated so deployment can use an online host arrangement that actually supports a persistent bot process. Do not assume the free web-service plan alone will keep polling alive 24/7.
+Run `schema.sql` in Supabase SQL Editor. It is safe to run again because tables/indexes use `if not exists` and new columns use `alter table ... add column if not exists`.
 
-## Setup
+## Koyeb
 
-1. Create a Supabase project.
-2. Run `schema.sql` in the Supabase SQL editor.
-3. Create a Telegram bot with BotFather.
-4. Set environment variables from `.env.example`.
-5. Configure Ollama Cloud credentials/model.
-6. Implement and configure at least one approved discovery provider before using `/find`.
+Koyeb supports GitHub-driven FastAPI deployment with a buildpack and a custom run command. Use:
+
+`uvicorn main:app --host 0.0.0.0 --port $PORT`
+
+Required environment variables:
+
+`TELEGRAM_BOT_TOKEN`, `ADMIN_TELEGRAM_ID`, `TELEGRAM_WEBHOOK_SECRET`, `WEBHOOK_BASE_URL`, `SUPABASE_URL`, `SUPABASE_KEY`, `OLLAMA_API_KEY`, `OLLAMA_BASE_URL`, `OLLAMA_MODEL`, `DASHBOARD_USER`, `DASHBOARD_PASSWORD`.
+
+After Koyeb gives you the public `*.koyeb.app` URL, put that exact URL in `WEBHOOK_BASE_URL` and redeploy. The application automatically calls Telegram `setWebhook` at startup using the secret path and Telegram's secret-token header.
 
 ## Telegram commands
 
 - `/start`
-- `/help`
 - `/find <city> <industry>`
 - `/hot`
 - `/lead <id>`
+- `/deal <lead_id> <value> <stage> <service1,service2>`
 - `/today`
 - `/stats`
 - `/followups`
 
-## Status flow
+Example:
 
-`NEW → RESEARCHED → QUALIFIED → CONTACTED → RESPONDED → MEETING → PROPOSAL → NEGOTIATION → WON`
+`/find jabalpur dental`
 
-Alternative outcomes: `LOST`, `NOT_INTERESTED`, `DO_NOT_CONTACT`.
+`/deal 123 55000 PROPOSAL Website,SEO,GBP`
 
-## Tracking rules
+## Tracking
 
-LeadHunter distinguishes:
+The system records what LeadHunter does and what you explicitly mark: Telegram interactions, call/status actions, follow-ups and deal stages/values.
 
-- message generated vs. user-marked contacted
-- Telegram message sent vs. user interaction with the lead
-- call intent vs. user-confirmed call outcome
+It does not claim that a WhatsApp/email was sent or that a phone call happened unless you explicitly mark the relevant action in Telegram.
 
-The system never claims a WhatsApp/email was sent, a phone conversation occurred, or a Telegram message was read unless the user explicitly records the event.
+## Discovery safety
 
-## Rate-limit rules
+The public OpenStreetMap Nominatim service has strict usage rules. LeadHunter uses it only to resolve the requested city and uses Overpass for the actual POI query. It does not systematically download all POIs through Nominatim.
 
-Provider-specific request limits must come from the provider's current documentation. LeadHunter uses configurable request budgets, minimum delays, 429 handling, bounded retries, and caching. Never add a source by guessing its limits.
+Overpass is a shared public resource. LeadHunter uses small queries, a low request rate, a daily safety budget, a 30-second pause after Overpass 429 responses, and a maximum of 50 candidates per search.
+
+## Research safety
+
+For each business with a website: check robots.txt; research at most 5 pages; reject responses above 1.5 MB; store structured findings instead of full HTML; rate-limit and back off; never bypass CAPTCHAs or access controls.
+
+## Limitation
+
+OpenStreetMap coverage varies by city and industry. A business absent from OSM is not evidence that it does not exist. Additional permitted sources can be added later without changing the Telegram/database architecture.
