@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+python-telegram-bot>=22,<23
+supabase
+httpx
+beautifulsoup4
+lxml
+python-dotenv
+apscheduler
