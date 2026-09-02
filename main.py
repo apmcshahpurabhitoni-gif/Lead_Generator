@@ -43,12 +43,3 @@ async def health(): return {"ok":True,"service":"leadhunter","version":APP_VERSI
 async def version(): return {"ok":True,"service":"leadhunter","version":APP_VERSION,"release_date":RELEASE_DATE,"whats_new":WHATS_NEW}
 @app.get("/__routes")
 async def route_list(): return {"ok":True,"version":APP_VERSION,"routes":routes()}
-@app.get("/telegram/status")
-async def telegram_status():
- return {"ok":True,"configured":bool(getattr(app.state,"bot_identity",None)),"bot":getattr(app.state,"bot_identity",{}),"webhook":getattr(app.state,"webhook_configured",False)}
-@app.post("/telegram/webhook/{secret}")
-async def telegram_webhook(secret:str,request:Request,x_telegram_bot_api_secret_token:str|None=Header(default=None)):
- expected=required("TELEGRAM_WEBHOOK_SECRET")
- if not secrets.compare_digest(secret,expected) or not x_telegram_bot_api_secret_token or not secrets.compare_digest(x_telegram_bot_api_secret_token,expected): raise HTTPException(403,"Forbidden")
- try: update=Update.de_json(await request.json(),app.state.bot.bot); await app.state.bot.process_update(update); return {"ok":True}
- except Exception: log.exception("Webhook processing failed"); return JSONResponse(status_code=200,content={"ok":False})
