@@ -3,11 +3,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from telegram import Update
-from bot import create_application
+from bot_results import create_application
 from database import Database
 from dashboard import router as dashboard_router
 
-APP_VERSION="2.0.0"
+APP_VERSION="2.1.0"
 logging.basicConfig(level=logging.INFO,format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
 log=logging.getLogger("leadhunter")
 
