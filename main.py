@@ -7,13 +7,16 @@ from bot import create_application
 from database import Database
 from dashboard import router as dashboard_router
 
-APP_VERSION="3.1.0"
+APP_VERSION="3.2.0"
 RELEASE_DATE="2026-09-02"
 WHATS_NEW=[
     "🚀 Startup now reports the exact running version every time Render starts the service.",
     "🆕 A separate What's New message explains what changed in that version.",
-    "🔎 Lead research now detects public profile/directory links published by a business website, including LinkedIn and Justdial links when the business itself links them.",
-    "🌐 Research keeps Google/OSM discovery plus website verification, phone/email extraction and Google Places enrichment.",
+    "🔎 Lead research detects public profile/directory links published by a business website, including LinkedIn and Justdial links when the business itself links them.",
+    "📍 Google Places is now the primary business discovery source when GOOGLE_MAPS_API_KEY is configured.",
+    "🛟 OpenStreetMap/Overpass remains the fallback when Google Places is not configured or temporarily unavailable.",
+    "💰 Google discovery results are reused during enrichment so the same search does not make a duplicate Google Places request.",
+    "🌐 Website verification, phone/email extraction, scoring and personalized pitch generation remain unchanged.",
     "🛡️ No direct automated scraping of LinkedIn or Justdial is added because their current terms prohibit unauthorized scraping/automated queries."
 ]
 logging.basicConfig(level=logging.INFO,format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
