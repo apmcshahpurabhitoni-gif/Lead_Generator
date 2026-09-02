@@ -3,11 +3,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from telegram import Update
-from bot_results import create_application
+from bot import create_application
 from database import Database
 from dashboard import router as dashboard_router
 
-APP_VERSION="2.1.0"
+APP_VERSION="3.0.0"
 logging.basicConfig(level=logging.INFO,format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
 log=logging.getLogger("leadhunter")
 
@@ -26,11 +26,9 @@ async def configure_webhook()->dict:
     bot_app=app.state.bot; base=required("WEBHOOK_BASE_URL").rstrip("/"); secret=required("TELEGRAM_WEBHOOK_SECRET"); expected=f"{base}/telegram/webhook/{secret}"
     info=await bot_app.bot.get_webhook_info()
     if info.url!=expected:
-        log.warning("Telegram webhook mismatch/missing; configuring it now")
         await bot_app.bot.set_webhook(url=expected,secret_token=secret,allowed_updates=["message","callback_query"],max_connections=5,drop_pending_updates=False)
         info=await bot_app.bot.get_webhook_info()
     app.state.webhook_url=expected; app.state.webhook_configured=(info.url==expected)
-    log.info("Telegram webhook READY | configured=%s | url=%s | pending=%s | last_error=%s",app.state.webhook_configured,safe_url(info.url),info.pending_update_count,info.last_error_message)
     return {"configured":app.state.webhook_configured,"url":safe_url(info.url),"pending_update_count":info.pending_update_count,"last_error_message":info.last_error_message,"last_error_date":info.last_error_date}
 
 async def startup_message()->None:
