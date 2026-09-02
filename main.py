@@ -5,25 +5,11 @@ from fastapi.responses import JSONResponse
 from telegram import Update
 from bot import create_application
 from database import Database
-from dashboard_v4 import router as dashboard_router
-APP_VERSION="3.5.0"
+from dashboard_v5 import router as dashboard_router
+APP_VERSION="3.5.1"
 RELEASE_DATE="2026-09-02"
-WHATS_NEW=[
- "📊 Lead intelligence is now data-first: Google visibility, website, phone, email, rating and reviews are prominent on every lead.",
- "📍 Google Local Search position is displayed as a dedicated visual metric with the exact tested query.",
- "🚨 Missing website, phone and email are shown as separate evidence cards instead of being buried in a paragraph.",
- "💡 Problems and opportunity reasons are presented as readable evidence, not a long plain-text note.",
- "🎯 Recommended services are shown as visual pitch chips so the reason to contact a lead is immediately clear.",
- "🌐 Public profiles/directories found during research are surfaced as clickable links.",
- "💬 Notes and activity retain a Telegram-style presentation while important research data stays above them.",
- "🔗 Google Maps, Google Search, website and discovered public-profile links are directly clickable.",
- "📱 Mobile lead details now prioritize intelligence before controls and secondary research links.",
- "🖥️ Desktop remains information-dense and keeps the same underlying lead data and pipeline.",
- "🧭 Business-type-specific online-presence rules remain part of lead scoring and research.",
- "🛡️ Missing checked sources are not treated as proof that a business is unregistered."
-]
-logging.basicConfig(level=logging.INFO,format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
-log=logging.getLogger("leadhunter")
+WHATS_NEW=["🔎 Dashboard search now matches multi-word queries by individual terms, so 'Jabalpur clinic' finds a lead whose city is Jabalpur and category is clinic.","📊 Lead intelligence remains data-first: Google visibility, website, phone, email, rating, reviews, problems and recommended services are prominent.","📱 Mobile lead cards remain compact while expanded details show the important evidence before secondary links.","🔗 Google Maps, Google Search, website and discovered public-profile links remain directly clickable."]
+logging.basicConfig(level=logging.INFO,format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"); log=logging.getLogger("leadhunter")
 def required(name:str)->str:
  value=os.getenv(name,"").strip()
  if not value: raise RuntimeError(f"Missing required environment variable: {name}")
@@ -34,16 +20,12 @@ def routes()->list[str]: return sorted({getattr(r,"path","") for r in app.routes
 async def configure_webhook()->dict:
  bot_app=app.state.bot; base=required("WEBHOOK_BASE_URL").rstrip("/"); secret=required("TELEGRAM_WEBHOOK_SECRET"); expected=f"{base}/telegram/webhook/{secret}"; info=await bot_app.bot.get_webhook_info()
  if info.url!=expected: await bot_app.bot.set_webhook(url=expected,secret_token=secret,allowed_updates=["message","callback_query"],max_connections=5,drop_pending_updates=False); info=await bot_app.bot.get_webhook_info()
- app.state.webhook_url=expected; app.state.webhook_configured=info.url==expected
- return {"configured":app.state.webhook_configured,"url":safe_url(info.url),"pending_update_count":info.pending_update_count,"last_error_message":info.last_error_message,"last_error_date":info.last_error_date}
+ app.state.webhook_url=expected; app.state.webhook_configured=info.url==expected; return {"configured":app.state.webhook_configured,"url":safe_url(info.url),"pending_update_count":info.pending_update_count,"last_error_message":info.last_error_message,"last_error_date":info.last_error_date}
 async def startup_messages()->None:
  admin=os.getenv("ADMIN_TELEGRAM_ID","").strip()
  if not admin:return
- dashboard_url="https://lead-generator-zzty.onrender.com/dashboard"
- started=f"🟢 <b>LEADHUNTER BOT STARTED</b>\n━━━━━━━━━━━━━━━━━━━━\n🤖 Status: <b>ONLINE</b>\n📦 Running Version: <b>v{APP_VERSION}</b>\n📅 Release: <b>{RELEASE_DATE}</b>\n🔗 Telegram: <b>CONNECTED</b>\n✅ Webhook: <b>READY</b>\n📊 Dashboard: <a href=\"{dashboard_url}\">OPEN DASHBOARD</a>\n\n💡 <i>This message is generated on every service startup so you know exactly what is running.</i>"
- whats_new=f"🆕 <b>WHAT'S NEW · v{APP_VERSION}</b>\n━━━━━━━━━━━━━━━━━━━━\n\n"+"\n".join(WHATS_NEW)+"\n\n🔍 <b>Source rule:</b> presence gaps are reported only against permitted checks; a missing checked source is not proof of non-registration."
- try:
-  await app.state.bot.bot.send_message(chat_id=int(admin),text=started,parse_mode="HTML"); await app.state.bot.bot.send_message(chat_id=int(admin),text=whats_new,parse_mode="HTML")
+ dashboard_url="https://lead-generator-zzty.onrender.com/dashboard"; started=f"🟢 <b>LEADHUNTER BOT STARTED</b>\n━━━━━━━━━━━━━━━━━━━━\n🤖 Status: <b>ONLINE</b>\n📦 Running Version: <b>v{APP_VERSION}</b>\n📅 Release: <b>{RELEASE_DATE}</b>\n🔗 Telegram: <b>CONNECTED</b>\n✅ Webhook: <b>READY</b>\n📊 Dashboard: <a href=\"{dashboard_url}\">OPEN DASHBOARD</a>"; whats_new=f"🆕 <b>WHAT'S NEW · v{APP_VERSION}</b>\n━━━━━━━━━━━━━━━━━━━━\n\n"+"\n".join(WHATS_NEW)
+ try: await app.state.bot.bot.send_message(chat_id=int(admin),text=started,parse_mode="HTML"); await app.state.bot.bot.send_message(chat_id=int(admin),text=whats_new,parse_mode="HTML")
  except Exception: log.exception("Startup messages failed")
 @asynccontextmanager
 async def lifespan(application:FastAPI):
