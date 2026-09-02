@@ -5,10 +5,10 @@ from fastapi.responses import JSONResponse
 from telegram import Update
 from bot import create_application
 from database import Database
-from dashboard_v6 import router as dashboard_router
-APP_VERSION="3.6.0"
+from dashboard_v8 import router as dashboard_router
+APP_VERSION="3.6.1"
 RELEASE_DATE="2026-09-02"
-WHATS_NEW=["🔎 Real dashboard lead discovery: choose business type and Madhya Pradesh city from lists and start a real discovery/research job.","🎯 Lead workspace now prioritizes the useful pitching data: Google visibility, website, phone, email, problems, opportunity reason, recommended services and evidence.","📊 Dashboard analytics, outreach pitch generation, lead stages and activity are connected to the existing database and Telegram research pipeline.","🎨 New LeadHunter visual system inspired by the supplied premium dashboard reference: Light/Dark plus Modern/Neo styles and mobile-first layout."]
+WHATS_NEW=["🎨 Dashboard now offers four selectable looks: Light Modern, Dark Modern, Light Neo and Dark Neo.","💡 Sales-critical lead intelligence is surfaced visually: Google/local position, website, phone and email.","⚠️ Problems, opportunity evidence and recommended services remain prominent for pitching.","📱 Mobile lead cards and appearance controls are optimized for touch."]
 logging.basicConfig(level=logging.INFO,format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"); log=logging.getLogger("leadhunter")
 def required(name:str)->str:
  value=os.getenv(name,"").strip()
