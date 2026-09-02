@@ -53,16 +53,21 @@ def _external_profile_links(url:str, soup:BeautifulSoup)->dict[str,list[str]]:
         host=parsed.netloc.lower().split(":",1)[0]
         if not host or host==source_host: continue
         kind=_classify_profile(target)
-        if kind:
-            profiles.setdefault(kind,[]).append(target)
+        if kind: profiles.setdefault(kind,[]).append(target)
     for key,values in list(profiles.items()): profiles[key]=list(dict.fromkeys(values))[:5]
     return profiles
 
 async def google_places_enrich(city:str,industry:str,businesses:list[dict[str,Any]])->dict[str,Any]:
+    query=f"{industry} in {city}"
+    # discovery.py already performed the Google Places call when a key was configured.
+    # Reuse those results so one lead search does not make the same billable request twice.
+    if businesses and all(bool(b.get("_google_enriched")) for b in businesses):
+        return {"status":"OK","query":query,"results":len(businesses),"source":"google_places_text_search"}
+
     key=os.getenv("GOOGLE_MAPS_API_KEY","").strip()
-    base={"status":"NOT_CONFIGURED","query":f"{industry} in {city}","results":0}
+    base={"status":"NOT_CONFIGURED","query":query,"results":0}
     if not key: return base
-    body={"textQuery":f"{industry} in {city}","pageSize":20,"rankPreference":"RELEVANCE","regionCode":"IN"}
+    body={"textQuery":query,"pageSize":20,"rankPreference":"RELEVANCE","regionCode":"IN"}
     fields="places.displayName,places.formattedAddress,places.websiteUri,places.nationalPhoneNumber,places.googleMapsUri,places.rating,places.userRatingCount"
     try:
         async with httpx.AsyncClient(timeout=20) as client:
@@ -147,9 +152,8 @@ async def research_business(business:dict[str,Any])->dict[str,Any]:
         result["problems"].append("Website was found but could not be successfully researched."); result["seo"]={"score":0,"reason":"No readable pages"}; return result
     profile_links:dict[str,list[str]]={}
     for page in pages:
-        for kind,urls in (page.get("profile_links") or {}).items():
-            profile_links.setdefault(kind,[]).extend(urls)
-    result["profiles"]={k:list(dict.fromkeys(v))[:5] for k,v in profile_links.items() if v} 
+        for kind,urls in (page.get("profile_links") or {}).items(): profile_links.setdefault(kind,[]).extend(urls)
+    result["profiles"]={k:list(dict.fromkeys(v))[:5] for k,v in profile_links.items() if v}
     home=pages[0]; score=100
     if not home["title"]: score-=20; result["problems"].append("Homepage title is missing.")
     if not home["description"]: score-=15; result["problems"].append("Homepage meta description is missing.")
