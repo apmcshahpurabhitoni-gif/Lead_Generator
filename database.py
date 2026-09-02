@@ -25,16 +25,24 @@ class Database:
         self.client.table("research").insert({"business_id":bid,"research_json":research,"problems":research.get("problems",[])}).execute()
         self.client.table("businesses").update({"score":score["score"],"priority":score["priority"],"recommended_services":score["recommended_services"],"problems":score["reasons"],"status":"QUALIFIED" if score["score"]>=60 else "RESEARCHED","updated_at":datetime.now(timezone.utc).isoformat()}).eq("id",bid).execute()
         await self.record_activity(bid,"RESEARCHED","system",f"Score={score['score']}")
-        if score["score"]>=60: await self.increment_stats(qualified=1)
-        if score["priority"]=="HOT": await self.increment_stats(hot_leads=1)
     async def get_lead(self,bid:int)->dict[str,Any]|None:
         r=self.client.table("businesses").select("*").eq("id",bid).limit(1).execute(); return r.data[0] if r.data else None
     async def list_leads(self,priority:str|None=None,limit:int=10,offset:int=0)->list[dict[str,Any]]:
         limit=max(1,min(limit,1000)); q=self.client.table("businesses").select("*").order("score",desc=True).range(offset,offset+limit-1)
         if priority: q=q.eq("priority",priority)
         r=q.execute(); return r.data or []
-    async def list_search_results(self,city:str,industry:str,limit:int=8,offset:int=0)->list[dict[str,Any]]:
-        limit=max(1,min(limit,50)); q=self.client.table("businesses").select("*").eq("city",city).eq("industry",industry).order("score",desc=True).range(offset,offset+limit-1); r=q.execute(); return r.data or []
+    async def list_search_results(self,city:str|None,industry:str|None,limit:int=8,offset:int=0)->list[dict[str,Any]]:
+        if not city or not industry: return []
+        limit=max(1,min(limit,1000)); q=self.client.table("businesses").select("*").eq("city",city).eq("industry",industry).order("score",desc=True).range(offset,offset+limit-1); r=q.execute(); return r.data or []
+    async def list_searches(self,limit:int=20)->list[dict[str,Any]]:
+        """Return persisted discovery jobs as the dashboard's saved-search history.
+
+        The existing jobs table already records city, industry, status and counts,
+        so no second search-history table is required.
+        """
+        limit=max(1,min(limit,100)); r=self.client.table("jobs").select("id,job_type,city,industry,status,started_at,finished_at,processed,succeeded,failed,error").eq("job_type","DISCOVERY").order("started_at",desc=True).limit(limit).execute(); return r.data or []
+    async def get_search(self,search_id:int)->dict[str,Any]|None:
+        r=self.client.table("jobs").select("id,job_type,city,industry,status,started_at,finished_at,processed,succeeded,failed,error").eq("id",search_id).eq("job_type","DISCOVERY").limit(1).execute(); return r.data[0] if r.data else None
     async def get_research(self,bid:int)->dict[str,Any]:
         r=self.client.table("research").select("research_json").eq("business_id",bid).order("created_at",desc=True).limit(1).execute(); return r.data[0]["research_json"] if r.data else {}
     async def set_status(self,bid:int,status:str)->None:
