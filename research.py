@@ -11,8 +11,21 @@ from discovery import normalize_website, request
 MAX_PAGES=5
 MAX_BYTES=1_500_000
 MAX_LINKS_PER_PAGE=20
+MAX_PROFILE_LINKS=20
 _robots_cache: dict[str, RobotFileParser|None]={}
 GOOGLE_PLACES_URL="https://places.googleapis.com/v1/places:searchText"
+
+PROFILE_PATTERNS={
+    "linkedin": ("linkedin.com/",),
+    "justdial": ("justdial.com/",),
+    "facebook": ("facebook.com/", "fb.com/"),
+    "instagram": ("instagram.com/",),
+    "youtube": ("youtube.com/", "youtu.be/"),
+    "x": ("x.com/", "twitter.com/"),
+    "google_business": ("google.com/maps", "maps.google.com/"),
+    "sulekha": ("sulekha.com/",),
+    "indiamart": ("indiamart.com/",),
+}
 
 def _norm_name(value:str)->str:
     return re.sub(r"[^a-z0-9]+"," ",(value or "").lower()).strip()
@@ -23,6 +36,27 @@ def _match_score(a:str,b:str)->float:
     if aa==bb: return 1.0
     if aa in bb or bb in aa: return 0.90
     return SequenceMatcher(None,aa,bb).ratio()
+
+def _classify_profile(url:str)->str|None:
+    host=urlparse(url).netloc.lower().split(":",1)[0]
+    path=(host+urlparse(url).path).lower()
+    for kind,markers in PROFILE_PATTERNS.items():
+        if any(marker in path for marker in markers): return kind
+    return None
+
+def _external_profile_links(url:str, soup:BeautifulSoup)->dict[str,list[str]]:
+    profiles:dict[str,list[str]]={}
+    source_host=urlparse(url).netloc.lower().split(":",1)[0]
+    for a in soup.find_all("a",href=True):
+        target=urljoin(url,a["href"]).split("#",1)[0]
+        parsed=urlparse(target)
+        host=parsed.netloc.lower().split(":",1)[0]
+        if not host or host==source_host: continue
+        kind=_classify_profile(target)
+        if kind:
+            profiles.setdefault(kind,[]).append(target)
+    for key,values in list(profiles.items()): profiles[key]=list(dict.fromkeys(values))[:5]
+    return profiles
 
 async def google_places_enrich(city:str,industry:str,businesses:list[dict[str,Any]])->dict[str,Any]:
     key=os.getenv("GOOGLE_MAPS_API_KEY","").strip()
@@ -63,12 +97,13 @@ def extract_page(url:str,content:bytes)->dict[str,Any]:
     for a in soup.find_all("a",href=True):
         target=urljoin(url,a["href"]).split("#",1)[0]
         if urlparse(target).netloc==host: links.append(target)
+    profiles=_external_profile_links(url,soup)
     text=soup.get_text(" ",strip=True)
     phones=re.findall(r"(?:\+91[\s-]?)?[6-9]\d{9}",text)
     emails=re.findall(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}",text,re.I)
     raw=content.decode("utf-8",errors="ignore").lower(); scripts=" ".join((s.get("src") or "") for s in soup.find_all("script")).lower()
     tech=[name for marker,name in [("wp-content","WordPress"),("woocommerce","WooCommerce"),("shopify","Shopify"),("gtag(","Google Analytics"),("googletagmanager","Google Tag Manager")] if marker in raw or marker in scripts]
-    return {"url":url,"title":title,"description":description,"headings":headings,"internal_links":sorted(set(links))[:MAX_LINKS_PER_PAGE],"schema":bool(soup.find("script",attrs={"type":"application/ld+json"})),"mobile_viewport":bool(soup.find("meta",attrs={"name":re.compile(r"^viewport$",re.I)})),"phones":list(dict.fromkeys(phones))[:5],"emails":list(dict.fromkeys(emails))[:5],"text_length":len(text),"technology":sorted(set(tech))}
+    return {"url":url,"title":title,"description":description,"headings":headings,"internal_links":sorted(set(links))[:MAX_LINKS_PER_PAGE],"profile_links":profiles,"schema":bool(soup.find("script",attrs={"type":"application/ld+json"})),"mobile_viewport":bool(soup.find("meta",attrs={"name":re.compile(r"^viewport$",re.I)})),"phones":list(dict.fromkeys(phones))[:5],"emails":list(dict.fromkeys(emails))[:5],"text_length":len(text),"technology":sorted(set(tech))}
 
 async def robots_allowed(website:str,target:str)->bool:
     host=urlparse(website).netloc
@@ -87,7 +122,7 @@ async def robots_allowed(website:str,target:str)->bool:
 
 async def research_business(business:dict[str,Any])->dict[str,Any]:
     website=normalize_website(business.get("website"))
-    result={"website":{"exists":bool(website),"pages":[],"errors":[],"robots_checked":False},"seo":{},"local":{},"search":{"status":"NOT_CONFIGURED","organic_rank":None},"google":{"local_rank":business.get("google_local_rank"),"match_confidence":business.get("google_match_confidence"),"maps_url":business.get("google_maps_url"),"rating":business.get("google_rating"),"review_count":business.get("google_review_count")},"technology":{"signals":[]},"buying_signals":[],"problems":[]}
+    result={"website":{"exists":bool(website),"pages":[],"errors":[],"robots_checked":False},"seo":{},"local":{},"search":{"status":"NOT_CONFIGURED","organic_rank":None},"google":{"local_rank":business.get("google_local_rank"),"match_confidence":business.get("google_match_confidence"),"maps_url":business.get("google_maps_url"),"rating":business.get("google_rating"),"review_count":business.get("google_review_count")},"profiles":{},"technology":{"signals":[]},"buying_signals":[],"problems":[]}
     if not website:
         result["problems"].append("No official website was found from the discovery source or Google Places."); result["seo"]={"score":0,"reason":"No verified website"}; result["local"]={"phone_found":bool(business.get("phone")),"email_found":bool(business.get("email")),"city":business.get("city")}; return result
     if not await robots_allowed(website,website+"/"):
@@ -110,6 +145,11 @@ async def research_business(business:dict[str,Any])->dict[str,Any]:
     pages=result["website"]["pages"]
     if not pages:
         result["problems"].append("Website was found but could not be successfully researched."); result["seo"]={"score":0,"reason":"No readable pages"}; return result
+    profile_links:dict[str,list[str]]={}
+    for page in pages:
+        for kind,urls in (page.get("profile_links") or {}).items():
+            profile_links.setdefault(kind,[]).extend(urls)
+    result["profiles"]={k:list(dict.fromkeys(v))[:5] for k,v in profile_links.items() if v} 
     home=pages[0]; score=100
     if not home["title"]: score-=20; result["problems"].append("Homepage title is missing.")
     if not home["description"]: score-=15; result["problems"].append("Homepage meta description is missing.")
