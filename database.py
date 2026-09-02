@@ -33,6 +33,8 @@ class Database:
         limit=max(1,min(limit,50)); q=self.client.table("businesses").select("*").order("score",desc=True).range(offset,offset+limit-1)
         if priority: q=q.eq("priority",priority)
         r=q.execute(); return r.data or []
+    async def list_search_results(self,city:str,industry:str,limit:int=8,offset:int=0)->list[dict[str,Any]]:
+        limit=max(1,min(limit,50)); q=self.client.table("businesses").select("*").eq("city",city).eq("industry",industry).order("score",desc=True).range(offset,offset+limit-1); r=q.execute(); return r.data or []
     async def get_research(self,bid:int)->dict[str,Any]:
         r=self.client.table("research").select("research_json").eq("business_id",bid).order("created_at",desc=True).limit(1).execute(); return r.data[0]["research_json"] if r.data else {}
     async def set_status(self,bid:int,status:str)->None:
