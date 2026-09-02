@@ -30,7 +30,7 @@ class Database:
     async def get_lead(self,bid:int)->dict[str,Any]|None:
         r=self.client.table("businesses").select("*").eq("id",bid).limit(1).execute(); return r.data[0] if r.data else None
     async def list_leads(self,priority:str|None=None,limit:int=10,offset:int=0)->list[dict[str,Any]]:
-        limit=max(1,min(limit,50)); q=self.client.table("businesses").select("*").order("score",desc=True).range(offset,offset+limit-1)
+        limit=max(1,min(limit,1000)); q=self.client.table("businesses").select("*").order("score",desc=True).range(offset,offset+limit-1)
         if priority: q=q.eq("priority",priority)
         r=q.execute(); return r.data or []
     async def list_search_results(self,city:str,industry:str,limit:int=8,offset:int=0)->list[dict[str,Any]]:
