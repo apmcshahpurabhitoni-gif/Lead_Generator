@@ -7,9 +7,16 @@ from bot import create_application
 from database import Database
 from dashboard_v3 import router as dashboard_router
 
-APP_VERSION="3.3.0"
+APP_VERSION="3.4.0"
 RELEASE_DATE="2026-09-02"
 WHATS_NEW=[
+    "📱 Mobile dashboard redesigned around a true vertical lead-detail experience instead of shrinking the desktop layout.",
+    "🏢 Lead details now prioritize the business identity, useful contact information and opportunity context first.",
+    "🎯 Lead stage is now a compact control on mobile instead of an oversized list of 11 radio rows.",
+    "💬 Notes and research findings now use a Telegram-style message presentation with clearer timestamps and readable detail.",
+    "🔗 Quick research links are moved to the bottom of the mobile lead detail and remain directly clickable.",
+    "⚡ Mobile lead cards use compact summaries with expandable details so the lead list stays easy to scan.",
+    "🖥️ Desktop remains information-dense while mobile gets its own responsive information hierarchy.",
     "🧭 Business-type-specific online-presence rules are now part of lead scoring instead of using one universal checklist for every industry.",
     "🟢 Required, 🟡 recommended and 🔵 conditional presence requirements now differ by business type.",
     "🍽️ Restaurants/cafes can be assessed for food platforms such as Zomato/Swiggy without incorrectly applying them to hospitals or professional services.",
