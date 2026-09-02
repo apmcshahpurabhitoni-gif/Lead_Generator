@@ -7,7 +7,15 @@ from bot import create_application
 from database import Database
 from dashboard import router as dashboard_router
 
-APP_VERSION="3.0.0"
+APP_VERSION="3.1.0"
+RELEASE_DATE="2026-09-02"
+WHATS_NEW=[
+    "🚀 Startup now reports the exact running version every time Render starts the service.",
+    "🆕 A separate What's New message explains what changed in that version.",
+    "🔎 Lead research now detects public profile/directory links published by a business website, including LinkedIn and Justdial links when the business itself links them.",
+    "🌐 Research keeps Google/OSM discovery plus website verification, phone/email extraction and Google Places enrichment.",
+    "🛡️ No direct automated scraping of LinkedIn or Justdial is added because their current terms prohibit unauthorized scraping/automated queries."
+]
 logging.basicConfig(level=logging.INFO,format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
 log=logging.getLogger("leadhunter")
 
@@ -31,19 +39,36 @@ async def configure_webhook()->dict:
     app.state.webhook_url=expected; app.state.webhook_configured=(info.url==expected)
     return {"configured":app.state.webhook_configured,"url":safe_url(info.url),"pending_update_count":info.pending_update_count,"last_error_message":info.last_error_message,"last_error_date":info.last_error_date}
 
-async def startup_message()->None:
+async def startup_messages()->None:
     admin=os.getenv("ADMIN_TELEGRAM_ID","").strip()
     if not admin: return
-    text=f"🟢 <b>LEADHUNTER ONLINE</b>\n━━━━━━━━━━━━━━━━━━━━\n🤖 Status: <b>ONLINE</b>\n📦 Version: <b>v{APP_VERSION}</b>\n🔗 Telegram: <b>CONNECTED</b>\n✅ Webhook: <b>READY</b>"
-    try: await app.state.bot.bot.send_message(chat_id=int(admin),text=text,parse_mode="HTML")
-    except Exception: log.exception("Startup message failed")
+    started=(
+        f"🟢 <b>LEADHUNTER BOT STARTED</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        f"🤖 Status: <b>ONLINE</b>\n"
+        f"📦 Running Version: <b>v{APP_VERSION}</b>\n"
+        f"📅 Release: <b>{RELEASE_DATE}</b>\n"
+        "🔗 Telegram: <b>CONNECTED</b>\n"
+        "✅ Webhook: <b>READY</b>\n\n"
+        "💡 <i>This message is generated on every service startup so you know exactly what is running.</i>"
+    )
+    whats_new=(
+        f"🆕 <b>WHAT'S NEW · v{APP_VERSION}</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"+
+        "\n".join(f"{x}" for x in WHATS_NEW)+
+        "\n\n🔍 <b>Source rule:</b> public profile links are captured when the business website publishes them; protected directory/social sites are not directly scraped."
+    )
+    try:
+        await app.state.bot.bot.send_message(chat_id=int(admin),text=started,parse_mode="HTML")
+        await app.state.bot.bot.send_message(chat_id=int(admin),text=whats_new,parse_mode="HTML")
+    except Exception: log.exception("Startup messages failed")
 
 @asynccontextmanager
 async def lifespan(application:FastAPI):
-    application.state.db=Database(); application.state.bot=create_application(application.state.db)
+    application.state.db=Database(); application.state.bot=create_application(application.state.db); application.state.bot.bot_data["version"]=APP_VERSION; application.state.bot.bot_data["release_date"]=RELEASE_DATE; application.state.bot.bot_data["whats_new"]=WHATS_NEW
     await application.state.bot.initialize(); await application.state.bot.start()
     me=await application.state.bot.bot.get_me(); application.state.bot_identity={"id":me.id,"username":me.username or "","first_name":me.first_name or ""}
-    await configure_webhook(); await startup_message(); log.info("LeadHunter startup complete | version=%s",APP_VERSION)
+    await configure_webhook(); await startup_messages(); log.info("LeadHunter startup complete | version=%s",APP_VERSION)
     try: yield
     finally:
         try: await application.state.bot.stop(); await application.state.bot.shutdown()
@@ -53,9 +78,11 @@ app=FastAPI(title="LeadHunter",version=APP_VERSION,lifespan=lifespan)
 app.include_router(dashboard_router)
 
 @app.get("/")
-async def root(): return {"service":"LeadHunter","status":"online","version":APP_VERSION,"telegram":"webhook","health":"/health","telegram_status":"/telegram/status"}
+async def root(): return {"service":"LeadHunter","status":"online","version":APP_VERSION,"release_date":RELEASE_DATE,"telegram":"webhook","health":"/health","telegram_status":"/telegram/status","version_info":"/version"}
 @app.get("/health")
-async def health(): return {"ok":True,"service":"leadhunter","version":APP_VERSION}
+async def health(): return {"ok":True,"service":"leadhunter","version":APP_VERSION,"release_date":RELEASE_DATE}
+@app.get("/version")
+async def version(): return {"ok":True,"service":"leadhunter","version":APP_VERSION,"release_date":RELEASE_DATE,"whats_new":WHATS_NEW}
 @app.get("/__routes")
 async def route_list(): return {"ok":True,"version":APP_VERSION,"routes":routes()}
 @app.get("/telegram/identity")
@@ -67,7 +94,7 @@ async def telegram_status():
     try:
         info=await bot_app.bot.get_webhook_info(); expected=f"{required('WEBHOOK_BASE_URL').rstrip('/')}/telegram/webhook/{required('TELEGRAM_WEBHOOK_SECRET')}"; repaired=False
         if info.url!=expected: await configure_webhook(); repaired=True; info=await bot_app.bot.get_webhook_info()
-        return {"ok":True,"version":APP_VERSION,"url_configured":info.url==expected,"url":safe_url(info.url),"pending_update_count":info.pending_update_count,"last_error_message":info.last_error_message,"last_error_date":info.last_error_date,"self_healed":repaired,"bot":getattr(app.state,"bot_identity",{})}
+        return {"ok":True,"version":APP_VERSION,"release_date":RELEASE_DATE,"url_configured":info.url==expected,"url":safe_url(info.url),"pending_update_count":info.pending_update_count,"last_error_message":info.last_error_message,"last_error_date":info.last_error_date,"self_healed":repaired,"bot":getattr(app.state,"bot_identity",{})}
     except Exception as exc:
         log.exception("Telegram status failed"); return JSONResponse(status_code=503,content={"ok":False,"error":"telegram_status_failed","detail":str(exc)})
 
