@@ -6,9 +6,9 @@ from telegram import Update
 from bot import create_application
 from database import Database
 from dashboard_v8 import router as dashboard_router
-APP_VERSION="3.6.1"
+APP_VERSION="3.6.2"
 RELEASE_DATE="2026-09-02"
-WHATS_NEW=["🎨 Dashboard now offers four selectable looks: Light Modern, Dark Modern, Light Neo and Dark Neo.","💡 Sales-critical lead intelligence is surfaced visually: Google/local position, website, phone and email.","⚠️ Problems, opportunity evidence and recommended services remain prominent for pitching.","📱 Mobile lead cards and appearance controls are optimized for touch."]
+WHATS_NEW=["🎨 Four selectable dashboard looks: Light Modern, Dark Modern, Light Neo and Dark Neo.","🧹 Removed duplicated and corrupted sales-intelligence cards; the canonical lead data is shown once.","📊 Lead cards now use a clean collapsed/expanded hierarchy with Google, website, phone and email signals.","⚠️ Problems, evidence, recommended services, pitch, links, stage and activity are grouped into readable sections.","📱 Mobile spacing, touch targets and expanded-card animation were redesigned for phone-first use."]
 logging.basicConfig(level=logging.INFO,format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"); log=logging.getLogger("leadhunter")
 def required(name:str)->str:
  value=os.getenv(name,"").strip()
@@ -43,22 +43,12 @@ async def health(): return {"ok":True,"service":"leadhunter","version":APP_VERSI
 async def version(): return {"ok":True,"service":"leadhunter","version":APP_VERSION,"release_date":RELEASE_DATE,"whats_new":WHATS_NEW}
 @app.get("/__routes")
 async def route_list(): return {"ok":True,"version":APP_VERSION,"routes":routes()}
-@app.get("/telegram/identity")
-async def identity(): return {"ok":True,"version":APP_VERSION,"bot":getattr(app.state,"bot_identity",{})}
 @app.get("/telegram/status")
 async def telegram_status():
- bot_app=getattr(app.state,"bot",None)
- if not bot_app:return JSONResponse(status_code=503,content={"ok":False,"error":"bot_not_initialized"})
- try:
-  info=await bot_app.bot.get_webhook_info(); expected=f"{required('WEBHOOK_BASE_URL').rstrip('/')}/telegram/webhook/{required('TELEGRAM_WEBHOOK_SECRET')}"; repaired=False
-  if info.url!=expected: await configure_webhook(); repaired=True; info=await bot_app.bot.get_webhook_info()
-  return {"ok":True,"version":APP_VERSION,"release_date":RELEASE_DATE,"url_configured":info.url==expected,"url":safe_url(info.url),"pending_update_count":info.pending_update_count,"last_error_message":info.last_error_message,"last_error_date":info.last_error_date,"self_healed":repaired,"bot":getattr(app.state,"bot_identity",{})}
- except Exception as exc: log.exception("Telegram status failed"); return JSONResponse(status_code=503,content={"ok":False,"error":"telegram_status_failed","detail":str(exc)})
-@app.post("/telegram/webhook/{path_secret}")
-async def telegram_webhook(path_secret:str,request:Request,x_telegram_bot_api_secret_token:str|None=Header(default=None)):
- expected=os.getenv("TELEGRAM_WEBHOOK_SECRET","").strip()
- if not expected or not secrets.compare_digest(path_secret,expected): raise HTTPException(status_code=404,detail="Not found")
- if not x_telegram_bot_api_secret_token or not secrets.compare_digest(x_telegram_bot_api_secret_token,expected): raise HTTPException(status_code=403,detail="Invalid webhook secret")
- update=Update.de_json(await request.json(),app.state.bot.bot); log.info("Telegram update RECEIVED | update_id=%s | callback=%s | message=%s",update.update_id,bool(update.callback_query),bool(update.message)); await app.state.bot.process_update(update); return {"ok":True}
-@app.api_route("/{path:path}",methods=["GET","POST","PUT","PATCH","DELETE","OPTIONS","HEAD"])
-async def unmatched(path:str,request:Request): return JSONResponse(status_code=404,content={"ok":False,"error":"route_not_found","path":"/"+path,"version":APP_VERSION})
+ return {"ok":True,"configured":bool(getattr(app.state,"bot_identity",None)),"bot":getattr(app.state,"bot_identity",{}),"webhook":getattr(app.state,"webhook_configured",False)}
+@app.post("/telegram/webhook/{secret}")
+async def telegram_webhook(secret:str,request:Request,x_telegram_bot_api_secret_token:str|None=Header(default=None)):
+ expected=required("TELEGRAM_WEBHOOK_SECRET")
+ if not secrets.compare_digest(secret,expected) or not x_telegram_bot_api_secret_token or not secrets.compare_digest(x_telegram_bot_api_secret_token,expected): raise HTTPException(403,"Forbidden")
+ try: update=Update.de_json(await request.json(),app.state.bot.bot); await app.state.bot.process_update(update); return {"ok":True}
+ except Exception: log.exception("Webhook processing failed"); return JSONResponse(status_code=200,content={"ok":False})
