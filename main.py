@@ -5,7 +5,7 @@ from fastapi.responses import JSONResponse
 from telegram import Update
 from bot import create_application
 from database import Database
-from dashboard import router as dashboard_router
+from dashboard_v2 import router as dashboard_router
 
 APP_VERSION="3.3.0"
 RELEASE_DATE="2026-09-02"
