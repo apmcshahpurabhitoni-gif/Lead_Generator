@@ -5,10 +5,10 @@ from fastapi.responses import JSONResponse
 from telegram import Update
 from bot import create_application
 from database import Database
-from dashboard_v8 import router as dashboard_router
-APP_VERSION="3.6.2"
+from dashboard_v9 import router as dashboard_router
+APP_VERSION="3.6.3"
 RELEASE_DATE="2026-09-02"
-WHATS_NEW=["🎨 Four selectable dashboard looks: Light Modern, Dark Modern, Light Neo and Dark Neo.","🧹 Removed duplicated and corrupted sales-intelligence cards; the canonical lead data is shown once.","📊 Lead cards now use a clean collapsed/expanded hierarchy with Google, website, phone and email signals.","⚠️ Problems, evidence, recommended services, pitch, links, stage and activity are grouped into readable sections.","📱 Mobile spacing, touch targets and expanded-card animation were redesigned for phone-first use."]
+WHATS_NEW=["🎨 Four selectable dashboard looks: Light Modern, Dark Modern, Light Neo and Dark Neo.","🧹 Removed duplicated and corrupted sales-intelligence cards; the canonical lead data is shown once.","📊 Lead cards now use a clean collapsed/expanded hierarchy with Google, website, phone and email signals.","⚠️ Problems, evidence, recommended services, pitch, links, stage and activity are grouped into readable sections.","📱 Mobile spacing, touch targets and expanded-card animation were redesigned for phone-first use.","✈️ Each lead can now be sent from the dashboard to the configured Telegram admin with its full sales intelligence."]
 logging.basicConfig(level=logging.INFO,format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"); log=logging.getLogger("leadhunter")
 def required(name:str)->str:
  value=os.getenv(name,"").strip()
