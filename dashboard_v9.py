@@ -52,7 +52,10 @@ async def _telegram_details(business_id: int, request: Request, authorization: s
     else:
         lines.append("• No major problem recorded.")
     lines += ["", "🛠️ <b>RECOMMENDED SERVICES</b>"]
-    lines.extend(f"• {html.escape(str(x))}" for x in services[:8]) if services else lines.append("• Audit first")
+    if services:
+        lines.extend(f"• {html.escape(str(x))}" for x in services[:8])
+    else:
+        lines.append("• Audit first")
     lines += ["", "💡 <b>WHY PITCH</b>"]
     if breakdown:
         lines.extend(f"• {html.escape(str(k))}: <b>+{v}</b>" for k, v in breakdown if v)
@@ -63,11 +66,9 @@ async def _telegram_details(business_id: int, request: Request, authorization: s
     if maps_url or website:
         lines += ["", "🔗 <b>USEFUL LINKS</b>"]
         if maps_url and str(maps_url).startswith("http"):
-            safe = html.escape(str(maps_url), quote=True)
-            lines.append(f'• <a href="{safe}">Google Maps</a>')
+            lines.append(f'• <a href="{html.escape(str(maps_url), quote=True)}">Google Maps</a>')
         if website and str(website).startswith("http"):
-            safe = html.escape(str(website), quote=True)
-            lines.append(f'• <a href="{safe}">Website</a>')
+            lines.append(f'• <a href="{html.escape(str(website), quote=True)}">Website</a>')
     text = "\n".join(lines)
     bot = getattr(getattr(request.app, "state", None), "bot", None)
     if not bot or not getattr(bot, "bot", None):
@@ -86,7 +87,6 @@ async def _telegram_details(business_id: int, request: Request, authorization: s
 async def send_lead_to_telegram(business_id: int, request: Request, authorization: str | None = Header(default=None)):
     return await _telegram_details(business_id, request, authorization)
 
-# Presentation-only action. V8's backend/data flow remains unchanged.
 PAGE = _base.PAGE
 CSS = r'''
 .telegram-send{margin-top:8px!important;background:var(--accent2)!important;color:#071114!important;border-color:var(--accent2)!important;font-weight:900!important}
@@ -102,10 +102,9 @@ JS = r'''
   function addButtons(){
     document.querySelectorAll('.lead').forEach(card=>{
       if(card.querySelector('.telegram-send'))return;
-      const summary=card.querySelector('.summary');
       const nameEl=card.querySelector('.name');
       const actions=card.querySelector('.actionsline');
-      if(!summary||!nameEl||!actions)return;
+      if(!nameEl||!actions)return;
       const name=(nameEl.textContent||'').trim();
       const b=document.createElement('button');b.type='button';b.className='btn telegram-send';b.textContent='✈️ Send to Telegram';b.dataset.leadName=name;
       b.addEventListener('click',async e=>{
@@ -124,12 +123,13 @@ JS = r'''
       actions.appendChild(b);
     });
   }
-  function inject(){const style=document.createElement('style');style.textContent=`${CSS}`;document.head.appendChild(style);addButtons();new MutationObserver(addButtons).observe(document.body,{childList:true,subtree:true});}
-  document.addEventListener('DOMContentLoaded',inject);
+  document.addEventListener('DOMContentLoaded',function(){
+    addButtons();
+    new MutationObserver(addButtons).observe(document.body,{childList:true,subtree:true});
+  });
 })();
 </script>
 '''
 PAGE = PAGE.replace('</style>', CSS + '</style>', 1)
 PAGE = PAGE.replace('</body>', JS + '</body>', 1)
 _base.PAGE = PAGE
-'''
