@@ -47,7 +47,8 @@ async def configure_webhook()->dict:
 async def startup_messages()->None:
     admin=os.getenv("ADMIN_TELEGRAM_ID","").strip()
     if not admin:return
-    started=(f"🟢 <b>LEADHUNTER BOT STARTED</b>\n━━━━━━━━━━━━━━━━━━━━\n🤖 Status: <b>ONLINE</b>\n📦 Running Version: <b>v{APP_VERSION}</b>\n📅 Release: <b>{RELEASE_DATE}</b>\n🔗 Telegram: <b>CONNECTED</b>\n✅ Webhook: <b>READY</b>\n\n💡 <i>This message is generated on every service startup so you know exactly what is running.</i>")
+    dashboard_url="https://lead-generator-zzty.onrender.com/dashboard"
+    started=(f"🟢 <b>LEADHUNTER BOT STARTED</b>\n━━━━━━━━━━━━━━━━━━━━\n🤖 Status: <b>ONLINE</b>\n📦 Running Version: <b>v{APP_VERSION}</b>\n📅 Release: <b>{RELEASE_DATE}</b>\n🔗 Telegram: <b>CONNECTED</b>\n✅ Webhook: <b>READY</b>\n📊 Dashboard: <a href=\"{dashboard_url}\">OPEN DASHBOARD</a>\n\n💡 <i>This message is generated on every service startup so you know exactly what is running.</i>")
     whats_new=(f"🆕 <b>WHAT'S NEW · v{APP_VERSION}</b>\n━━━━━━━━━━━━━━━━━━━━\n\n"+"\n".join(WHATS_NEW)+"\n\n🔍 <b>Source rule:</b> presence gaps are reported only against permitted checks; a missing checked source is not claimed to prove that a business is unregistered there.")
     try:
         await app.state.bot.bot.send_message(chat_id=int(admin),text=started,parse_mode="HTML")
