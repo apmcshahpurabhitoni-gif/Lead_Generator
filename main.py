@@ -1,16 +1,14 @@
 import logging, os, secrets
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import JSONResponse
-from telegram import Update
+from fastapi import FastAPI
 from bot import create_application
 from database import Database
-import dashboard_v10
+import dashboard_v11
 import dashboard_telegram
-from dashboard_v10 import router as dashboard_router
-APP_VERSION="3.7.0"
+from dashboard_v11 import router as dashboard_router
+APP_VERSION="3.7.1"
 RELEASE_DATE="2026-09-02"
-WHATS_NEW=["🧭 Canonical five-page dashboard: Leads, Find, Analytics, Outreach and Settings.","💾 Discovery jobs are now the persistent saved-search history; previous Jabalpur/Indore searches can be reopened without running discovery again.","📱 Mobile dashboard was rebuilt around one bottom navigation with phone-sized cards and touch targets.","🎨 Light Modern is now a genuine modern SaaS-style theme; Neo looks remain available in Settings.","📊 Analytics and prioritized Outreach are now first-class dashboard pages.","✈️ Lead details can be sent to the configured Telegram admin with verified research, score reasons and useful links."]
+WHATS_NEW=["🧭 Canonical five-page dashboard: Leads, Find, Analytics, Outreach and Settings.","💾 Discovery jobs persist as saved-search history and previous searches can be reopened.","📱 Mobile dashboard uses one bottom navigation and phone-sized cards.","🎨 Light Modern is a genuine modern SaaS-style theme; Neo looks remain available in Settings.","📊 Analytics and prioritized Outreach are first-class dashboard pages.","✈️ Lead details can be sent to the configured Telegram admin.","⚡ Dashboard now paints immediately and hydrates data asynchronously, preventing the mobile blank screen."]
 logging.basicConfig(level=logging.INFO,format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"); log=logging.getLogger("leadhunter")
 def required(name:str)->str:
  value=os.getenv(name,"").strip()
