@@ -1,5 +1,5 @@
-SERVICE_NAMES=["SEO","GEO","AEO","Google Business Profile","EPR","Websites","Automations","AI Integration","Custom Software","BigQuery","Cloud"]
-STATUS_VALUES=["NEW","RESEARCHED","QUALIFIED","CONTACTED","RESPONDED","MEETING","PROPOSAL","NEGOTIATION","WON","LOST","NOT_INTERESTED","DO_NOT_CONTACT"]
+from constants import PIPELINE_STATUSES, SERVICE_NAMES
+STATUS_VALUES = PIPELINE_STATUSES
 
 # Business-type-specific presence rules. These are sales-audit rules, not claims that
 # every business must be listed on every platform. Conditional sources only apply
@@ -70,32 +70,85 @@ def _presence_audit(research):
     missing_recommended=[v["label"] for v in audit.values() if v["tier"]=="recommended" and v["status"]!="FOUND"]
     return {"business_type":industry,"rules":rules,"audit":audit,"presence_score":presence_score,"missing_required":missing_required,"missing_recommended":missing_recommended,"note":"NOT_FOUND_ON_CHECKED_SOURCES means the source was not found through the permitted checks; it is not proof that the business is unregistered there."}
 
-def score_lead(research:dict)->dict:
-    website=research.get("website",{}); seo=research.get("seo",{}); local=research.get("local",{}); google=research.get("google",{}); buying=research.get("buying_signals",[])
-    presence=_presence_audit(research); score=25; breakdown=[("Base opportunity",25)]; reasons=list(research.get("problems",[]))
+def score_lead(research: dict) -> dict:
+    website = research.get("website") or {}
+    seo = research.get("seo") or {}
+    local = research.get("local") or {}
+    google = research.get("google") or {}
+    buying = research.get("buying_signals") or []
+    score = 25
+    breakdown = [("Base opportunity", 25)]
+    reasons = list(research.get("problems") or [])
+
     if not website.get("exists"):
-        score+=22; breakdown.append(("No verified official website",22)); reasons.append("No verified official website was found.")
+        score += 22
+        breakdown.append(("No verified official website", 22))
+        reasons.append("No verified official website was found from the available discovery sources.")
     else:
-        s=int(seo.get("score",100) or 0); bonus=18 if s<50 else 10 if s<75 else 0
-        score+=bonus; breakdown.append((f"Website SEO quality {s}/100",bonus))
-    missing_required=len(presence["missing_required"]); missing_recommended=len(presence["missing_recommended"])
-    req_bonus=min(24,missing_required*8); rec_bonus=min(8,missing_recommended*2)
-    if req_bonus: score+=req_bonus; breakdown.append((f"Missing {missing_required} business-type required presence item(s)",req_bonus)); reasons.append("Missing relevant required presence: "+", ".join(presence["missing_required"][:6])+".")
-    if rec_bonus: score+=rec_bonus; breakdown.append((f"Missing {missing_recommended} relevant recommended presence item(s)",rec_bonus))
-    if not local.get("phone_found"): score+=4; breakdown.append(("No visible phone",4)); reasons.append("No public business phone was found in the researched sources.")
-    if not local.get("email_found"): score+=3; breakdown.append(("No visible email",3)); reasons.append("No public business email was found in the researched sources.")
-    rank=google.get("local_rank")
+        seo_score = int(seo.get("score", 0) or 0)
+        bonus = 18 if seo_score < 50 else 10 if seo_score < 75 else 0
+        if bonus:
+            score += bonus
+            breakdown.append((f"Website SEO quality {seo_score}/100", bonus))
+        if seo_score < 75:
+            reasons.append(f"Website has basic technical/SEO gaps (audit score {seo_score}/100).")
+
+    # Directory absence is not scored: the crawler only knows what was checked on
+    # the business's own website, not whether a protected third-party listing exists.
+    presence = _presence_audit(research)
+
+    if not local.get("phone_found"):
+        score += 4
+        breakdown.append(("No publicly found phone", 4))
+        reasons.append("No public business phone was found in the researched sources.")
+    if not local.get("email_found"):
+        score += 3
+        breakdown.append(("No publicly found email", 3))
+        reasons.append("No public business email was found in the researched sources.")
+
+    rank = google.get("local_rank")
     if rank:
-        bonus=10 if rank>10 else 6 if rank>5 else 2; score+=bonus; breakdown.append((f"Google local position #{rank}",bonus))
-        if rank>5: reasons.append(f"Google local search position is #{rank} for the tested query.")
-    buying_bonus=min(6,len(buying)*2)
-    if buying_bonus: score+=buying_bonus; breakdown.append(("Buying signals",buying_bonus))
-    score=max(0,min(100,score)); priority="HOT" if score>=80 else "HIGH" if score>=60 else "MEDIUM" if score>=40 else "LOW"
-    services=[]; s=int(seo.get("score",100) or 0)
-    if not website.get("exists"): services.append("Websites")
-    if website.get("exists") and s<75: services.append("SEO")
-    if website.get("exists") and s<60: services.extend(["AEO","GEO"])
-    if rank and rank>5: services.append("Google Business Profile")
-    if presence["missing_required"] or presence["missing_recommended"]: services.append("SEO")
-    if buying: services.append("Automations")
-    return {"score":score,"priority":priority,"recommended_services":list(dict.fromkeys(services)),"reasons":reasons[:20],"breakdown":breakdown,"presence":presence}
+        bonus = 10 if int(rank) > 10 else 6 if int(rank) > 5 else 2
+        score += bonus
+        breakdown.append((f"Provider result position #{int(rank)}", bonus))
+        if int(rank) > 5:
+            reasons.append(f"Google Places result position is #{int(rank)} for the tested discovery query.")
+
+    buying_bonus = min(6, len(buying) * 2)
+    if buying_bonus:
+        score += buying_bonus
+        breakdown.append(("Verified buying signals", buying_bonus))
+
+    score = max(0, min(100, score))
+    priority = "HOT" if score >= 80 else "HIGH" if score >= 60 else "MEDIUM" if score >= 40 else "LOW"
+    services = []
+    seo_score = int(seo.get("score", 0) or 0)
+    if not website.get("exists"):
+        services.append("Websites")
+    elif seo_score < 75:
+        services.append("SEO")
+    if website.get("exists") and seo_score < 60:
+        services.extend(["AEO", "GEO"])
+    if rank and int(rank) > 5:
+        services.append("Google Business Profile")
+    if buying:
+        services.append("Automations")
+
+    return {
+        "score": score, "priority": priority,
+        "recommended_services": list(dict.fromkeys(services)),
+        "reasons": reasons[:20], "breakdown": breakdown,
+        "presence": presence,
+        "confidence": _confidence(research),
+    }
+
+def _confidence(research: dict) -> int:
+    website = research.get("website") or {}
+    if not research:
+        return 0
+    if website.get("exists") and website.get("pages"):
+        return 90 if not website.get("errors") else 75
+    if research.get("google") or research.get("local"):
+        return 55
+    return 30
+

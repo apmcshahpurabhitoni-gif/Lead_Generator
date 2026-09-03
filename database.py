@@ -1,5 +1,8 @@
 import os
 from datetime import date, datetime, timezone
+import re
+from constants import PIPELINE_STATUSES, STATUS_RANK
+from identity import domain, identity_key as canonical_identity_key, norm
 from typing import Any
 from supabase import Client, create_client
 
@@ -13,30 +16,64 @@ class Database:
         self.client: Client = create_client(url, key)
 
     @staticmethod
-    def identity_key(name: str, city: str, website: str | None) -> str:
-        if website:
-            return website.strip().lower().replace("https://", "").replace("http://", "").strip("/")
-        return f"{name.strip().lower()}|{city.strip().lower()}"
+    def _norm(value: str | None) -> str:
+        return norm(value)
+
+    @staticmethod
+    def _domain(website: str | None) -> str | None:
+        return domain(website)
+
+    @staticmethod
+    def identity_key(name: str, city: str, website: str | None, **kwargs: Any) -> str:
+        return canonical_identity_key(name, city, website, **kwargs)
 
     async def upsert_business(self, business: dict[str, Any]) -> tuple[int | None, bool]:
-        identity = business.get("identity_key") or self.identity_key(
-            business.get("name", ""), business.get("city", ""), business.get("website")
+        identity = business.get("identity_key") or canonical_identity_key(
+            business.get("name"), business.get("city"), business.get("website"),
+            source_place_id=business.get("source_place_id"),
+            phone=business.get("phone"), address=business.get("address"),
         )
-        old = self.client.table("businesses").select("id").eq("identity_key", identity).limit(1).execute()
-        created = not bool(old.data)
-        row = {k: business.get(k) for k in [
-            "name", "industry", "city", "website", "phone", "email", "source",
-            "source_attribution", "source_place_id"
-        ]}
-        row["identity_key"] = identity
-        result = self.client.table("businesses").upsert(row, on_conflict="identity_key").execute()
-        if not result.data:
-            return None, False
-        bid = int(result.data[0]["id"])
-        if created:
-            await self.record_activity(bid, "DISCOVERED", "system", business.get("source", "unknown"))
-            await self.increment_stats(leads_found=1)
-        return bid, created
+        place_id = business.get("source_place_id")
+        domain_name = domain(business.get("website"))
+        phone_digits = re.sub(r"\D+", "", str(business.get("phone") or "")) or None
+        name_norm = norm(business.get("name"))
+        address_norm = norm(business.get("address") or business.get("city"))
+
+        old = None
+        if place_id:
+            r = self.client.table("businesses").select("*").eq("source_place_id", place_id).limit(1).execute()
+            old = r.data[0] if r.data else None
+        if not old and domain_name:
+            r = self.client.table("businesses").select("*").eq("identity_key", "domain:"+domain_name).limit(1).execute()
+            old = r.data[0] if r.data else None
+        if not old and business.get("website"):
+            # Legacy rows may contain the old bare-domain identity key.
+            r = self.client.table("businesses").select("*").eq("website", business.get("website")).limit(1).execute()
+            old = r.data[0] if r.data else None
+        if not old and phone_digits:
+            r = self.client.table("businesses").select("*").eq("normalized_phone", phone_digits).eq("city", business.get("city")).limit(1).execute()
+            old = r.data[0] if r.data else None
+        if not old:
+            r = self.client.table("businesses").select("*").eq("identity_key", identity).limit(1).execute()
+            old = r.data[0] if r.data else None
+
+        fields=["name","industry","city","website","phone","email","source","source_attribution","source_place_id","address"]
+        row={k:business.get(k) for k in fields}
+        row.update({"identity_key":identity,"website_domain":domain_name,"normalized_phone":phone_digits,
+                    "normalized_name":name_norm,"normalized_address":address_norm,
+                    "updated_at":datetime.now(timezone.utc).isoformat()})
+        if old:
+            for key in fields:
+                if not row.get(key) and old.get(key):
+                    row[key]=old[key]
+            self.client.table("businesses").update(row).eq("id",old["id"]).execute()
+            return int(old["id"]),False
+        result=self.client.table("businesses").insert(row).execute()
+        if not result.data: return None,False
+        bid=int(result.data[0]["id"])
+        await self.record_activity(bid,"DISCOVERED","system",business.get("source","unknown"))
+        await self.increment_stats(leads_found=1)
+        return bid,True
 
     async def save_research_and_score(self, bid: int, research: dict[str, Any], score: dict[str, Any]) -> None:
         self.client.table("research").insert({
@@ -44,22 +81,31 @@ class Database:
             "research_json": research,
             "problems": research.get("problems", []),
         }).execute()
+        current = await self.get_lead(bid)
+        current_status = (current or {}).get("status", "NEW")
+        new_status = "QUALIFIED" if int(score.get("score", 0)) >= 60 else "RESEARCHED"
+        # Research can only advance a lead from NEW; it never moves an active CRM lead backwards.
+        if current_status not in PIPELINE_STATUSES or STATUS_RANK.get(new_status, 0) > STATUS_RANK.get(current_status, 0):
+            status = new_status
+        else:
+            status = current_status
         self.client.table("businesses").update({
             "score": score["score"],
             "priority": score["priority"],
             "recommended_services": score["recommended_services"],
             "problems": score["reasons"],
-            "status": "QUALIFIED" if score["score"] >= 60 else "RESEARCHED",
+            "status": status,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", bid).execute()
-        await self.record_activity(bid, "RESEARCHED", "system", f"Score={score['score']}")
+        await self.record_activity(bid, "RESEARCHED", "system", f"Score={score['score']}; Confidence={score.get('confidence', 0)}")
 
-    async def add_search_result(self, search_id: int | None, business_id: int | None) -> None:
+    async def add_search_result(self, search_id: int | None, business_id: int | None, result_rank: int | None = None) -> None:
         if not search_id or not business_id:
             return
         self.client.table("search_results").upsert({
             "search_id": int(search_id),
             "business_id": int(business_id),
+            "result_rank": result_rank,
         }, on_conflict="search_id,business_id").execute()
 
     async def get_lead(self, bid: int) -> dict[str, Any] | None:
@@ -79,7 +125,7 @@ class Database:
         ids = [int(x["id"]) for x in rows if x.get("id") is not None]
         if not ids:
             return rows
-        research_rows = self.client.table("research").select("business_id,research_json,created_at").in_("business_id", ids).order("created_at", desc=True).limit(max(100, len(ids) * 5)).execute().data or []
+        research_rows = self.client.table("research").select("business_id,research_json,created_at").in_("business_id", ids).order("created_at", desc=True).limit(min(5000, max(100, len(ids) * 20))).execute().data or []
         latest: dict[int, dict[str, Any]] = {}
         for item in research_rows:
             bid = int(item["business_id"])
@@ -105,7 +151,7 @@ class Database:
         ids = [int(x["id"]) for x in rows if x.get("id") is not None]
         if not ids:
             return rows
-        items = self.client.table("research").select("business_id,research_json,created_at").in_("business_id", ids).order("created_at", desc=True).limit(max(100, len(ids) * 5)).execute().data or []
+        items = self.client.table("research").select("business_id,research_json,created_at").in_("business_id", ids).order("created_at", desc=True).limit(min(5000, max(100, len(ids) * 20))).execute().data or []
         latest: dict[int, dict[str, Any]] = {}
         for item in items:
             latest.setdefault(int(item["business_id"]), item.get("research_json") or {})
@@ -132,6 +178,14 @@ class Database:
         return r.data[0]["research_json"] if r.data else {}
 
     async def set_status(self, bid: int, status: str) -> None:
+        if status not in PIPELINE_STATUSES:
+            raise ValueError(f"Invalid pipeline status: {status}")
+        current = await self.get_lead(bid)
+        if not current:
+            raise ValueError("Lead not found")
+        old_status = current.get("status") or "NEW"
+        if old_status in PIPELINE_STATUSES and STATUS_RANK.get(status, 0) < STATUS_RANK.get(old_status, 0):
+            raise ValueError(f"Pipeline cannot move backwards from {old_status} to {status}")
         self.client.table("businesses").update({"status": status, "updated_at": datetime.now(timezone.utc).isoformat()}).eq("id", bid).execute()
 
     async def record_activity(self, bid: int, action: str, channel: str, notes: str = "") -> None:
@@ -203,6 +257,38 @@ class Database:
         row = r.data[0] if r.data else {}
         fields = ["leads_found", "qualified", "hot_leads", "calls", "contacted", "replies", "meetings", "proposals", "won", "lost"]
         return {f: int(row.get(f, 0) or 0) for f in fields}
+
+    async def analytics(self) -> dict[str, Any]:
+        rows = self.client.table("businesses").select("id,status,priority,city,industry,recommended_services").limit(10000).execute().data or []
+        qualified_statuses = {"RESEARCHED","QUALIFIED","CONTACTED","RESPONDED","MEETING","PROPOSAL","NEGOTIATION","WON"}
+        contacted_statuses = {"CONTACTED","RESPONDED","MEETING","PROPOSAL","NEGOTIATION","WON"}
+        # Exact database counts keep headline metrics correct even when the table grows
+        # beyond the reporting sample used for city/industry breakdowns.
+        def exact_count(field=None, value=None):
+            q = self.client.table("businesses").select("id", count="exact")
+            if field: q = q.eq(field, value)
+            return int(q.execute().count or 0)
+        total = exact_count()
+        qualified = sum(exact_count("status", x) for x in qualified_statuses)
+        contacted = sum(exact_count("status", x) for x in contacted_statuses)
+        won = exact_count("status", "WON")
+        hot = exact_count("priority", "HOT")
+        def counts(field: str):
+            data = {}
+            for row in rows:
+                key = str(row.get(field) or "Unknown")
+                data[key] = data.get(key, 0) + 1
+            return [{"name": k, "count": v} for k,v in sorted(data.items(), key=lambda x:x[1], reverse=True)[:8]]
+        services = {}
+        for row in rows:
+            for service in row.get("recommended_services") or []:
+                services[str(service)] = services.get(str(service), 0) + 1
+        return {"totals":{"leads":total,"qualified":qualified,"contacted":contacted,"won":won,"hot":hot},
+                "conversion":{"qualified_rate":round(qualified/total*100,1) if total else 0,
+                              "contact_rate":round(contacted/total*100,1) if total else 0,
+                              "win_rate":round(won/contacted*100,1) if contacted else 0},
+                "cities":counts("city"),"industries":counts("industry"),
+                "services":[{"name":k,"count":v} for k,v in sorted(services.items(), key=lambda x:x[1], reverse=True)[:8]]}
 
     @staticmethod
     def format_research(r: dict[str, Any]) -> str:

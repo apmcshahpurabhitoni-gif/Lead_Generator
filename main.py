@@ -1,20 +1,11 @@
-import logging, os
+import logging, os, secrets
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from bot import create_application
 from database import Database
 from dashboard import router as dashboard_router
 
-APP_VERSION = "3.8.0"
-RELEASE_DATE = "2026-09-03"
-WHATS_NEW = [
-    "🧭 Rebuilt the dashboard as one canonical workspace instead of stacked dashboard versions.",
-    "⚡ Faster lead loading with batched research reads instead of one database request per lead.",
-    "💾 Saved searches now have durable result membership.",
-    "📱 Mobile-first five-page navigation: Leads, Find, Analytics, Outreach and Settings.",
-    "🎨 Light Modern, Dark Modern, Light Neo and Dark Neo remain available in Settings.",
-    "📨 Lead details can be sent directly to the configured Telegram admin.",
-]
+from config import APP_VERSION, RELEASE_DATE, WHATS_NEW
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
 log = logging.getLogger("leadhunter")
@@ -40,7 +31,7 @@ async def configure_webhook() -> dict:
     bot_app = app.state.bot
     base = required("WEBHOOK_BASE_URL").rstrip("/")
     secret = required("TELEGRAM_WEBHOOK_SECRET")
-    expected = f"{base}/telegram/webhook/{secret}"
+    expected = f"{base}/telegram/webhook"
     info = await bot_app.bot.get_webhook_info()
     if info.url != expected:
         await bot_app.bot.set_webhook(
@@ -106,6 +97,28 @@ async def lifespan(application: FastAPI):
 app = FastAPI(title="LeadHunter", version=APP_VERSION, lifespan=lifespan)
 app.include_router(dashboard_router)
 
+
+@app.post("/telegram/webhook")
+async def telegram_webhook(request: Request):
+    expected = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
+    header_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+    if not expected or not secrets.compare_digest(header_secret, expected):
+        raise HTTPException(403, "Invalid Telegram secret token")
+    bot_app = getattr(request.app.state, "bot", None)
+    if not bot_app:
+        raise HTTPException(503, "Telegram bot is not ready")
+    from telegram import Update
+    update = Update.de_json(await request.json(), bot_app.bot)
+    await bot_app.update_queue.put(update)
+    return {"ok": True}
+
+@app.get("/telegram/status")
+async def telegram_status():
+    bot_app = getattr(app.state, "bot", None)
+    configured = bool(os.getenv("TELEGRAM_BOT_TOKEN", "").strip() and os.getenv("WEBHOOK_BASE_URL", "").strip() and os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip())
+    return {"ok": True, "configured": configured, "bot_running": bool(bot_app),
+            "webhook_configured": bool(getattr(app.state, "webhook_configured", False)),
+            "webhook_url": safe_url(getattr(app.state, "webhook_url", "")) if getattr(app.state, "webhook_url", "") else None}
 
 @app.get("/")
 async def root():

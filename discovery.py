@@ -13,7 +13,9 @@ OVERPASS_URLS = [
     "https://overpass-api.de/api/interpreter",
     "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
 ]
-USER_AGENT = "LeadHunter/3.2 (business research; Google Places + OSM discovery)"
+from config import APP_VERSION
+
+USER_AGENT = f"LeadHunter/{APP_VERSION} (business research; Google Places + OSM discovery)"
 POLICIES = {
     "nominatim": {"rpm": 50, "daily": 500, "delay": 1.1, "retries": 0},
     "overpass": {"rpm": 6, "daily": 100, "delay": 10.0, "retries": 0},
@@ -123,61 +125,57 @@ async def _google_discover(city: str, industry: str, limit: int) -> list[dict[st
     key = os.getenv("GOOGLE_MAPS_API_KEY", "").strip()
     if not key:
         return []
-
     query = "businesses in " + city if industry.strip().lower() in {"all", "business", "businesses"} else f"{industry} in {city}"
     fields = ",".join([
-        "places.id",
-        "places.displayName",
-        "places.formattedAddress",
-        "places.websiteUri",
-        "places.nationalPhoneNumber",
-        "places.googleMapsUri",
-        "places.rating",
-        "places.userRatingCount",
+        "places.id","places.displayName","places.formattedAddress","places.websiteUri",
+        "places.nationalPhoneNumber","places.googleMapsUri","places.rating","places.userRatingCount",
     ])
-    page_size = min(20, max(1, int(limit)))
-    body = {"textQuery": query, "pageSize": page_size, "rankPreference": "RELEVANCE", "regionCode": "IN"}
+    wanted = max(1, min(int(limit), 50))
+    results, seen, page_token = [], set(), None
     try:
-        response = await request(
-            "google", "POST", GOOGLE_PLACES_URL, timeout=20,
-            headers={"X-Goog-Api-Key": key, "X-Goog-FieldMask": fields, "Content-Type": "application/json"},
-            json=body,
-        )
-        places = response.json().get("places", [])
+        while len(results) < wanted:
+            body = {"textQuery": query, "pageSize": min(20, wanted-len(results)), "rankPreference": "RELEVANCE", "regionCode": "IN"}
+            if page_token:
+                body["pageToken"] = page_token
+            response = await request(
+                "google", "POST", GOOGLE_PLACES_URL, timeout=20,
+                headers={"X-Goog-Api-Key": key, "X-Goog-FieldMask": fields + ",nextPageToken", "Content-Type": "application/json"},
+                json=body,
+            )
+            data = response.json()
+            places = data.get("places", [])
+            if not places:
+                break
+            for place in places:
+                if len(results) >= wanted:
+                    break
+                name = ((place.get("displayName") or {}).get("text") or "").strip()
+                if not name:
+                    continue
+                place_id = str(place.get("id") or "").strip()
+                website = normalize_website(place.get("websiteUri"))
+                identity = place_id or website or f"{name.lower()}|{city.lower()}"
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                results.append({
+                    "name": name, "industry": industry, "city": city, "address": place.get("formattedAddress"), "website": website,
+                    "phone": place.get("nationalPhoneNumber"), "email": None,
+                    "source": "google_places_text_search",
+                    "source_attribution": "Google Maps Platform / Places API",
+                    "source_place_id": f"google:{place_id}" if place_id else None,
+                    "resolved_city": city, "google_provider_rank": len(results) + 1, "google_local_rank": len(results) + 1,
+                    "google_match_confidence": 1.0, "google_maps_url": place.get("googleMapsUri") or "",
+                    "google_rating": place.get("rating"), "google_review_count": place.get("userRatingCount"),
+                    "_google_enriched": True,
+                })
+            page_token = data.get("nextPageToken")
+            if not page_token:
+                break
+            await asyncio.sleep(0.25)
     except Exception as exc:
         log.warning("Google Places discovery failed | city=%s | industry=%s | %s", city, industry, exc)
-        return []
-
-    results: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for rank, place in enumerate(places[:limit], start=1):
-        name = ((place.get("displayName") or {}).get("text") or "").strip()
-        if not name:
-            continue
-        place_id = str(place.get("id") or "").strip()
-        website = normalize_website(place.get("websiteUri"))
-        identity = place_id or website or f"{name.lower()}|{city.lower()}"
-        if identity in seen:
-            continue
-        seen.add(identity)
-        results.append({
-            "name": name,
-            "industry": industry,
-            "city": city,
-            "website": website,
-            "phone": place.get("nationalPhoneNumber"),
-            "email": None,
-            "source": "google_places_text_search",
-            "source_attribution": "Google Maps Platform / Places API",
-            "source_place_id": f"google:{place_id}" if place_id else None,
-            "resolved_city": city,
-            "google_local_rank": rank,
-            "google_match_confidence": 1.0,
-            "google_maps_url": place.get("googleMapsUri") or "",
-            "google_rating": place.get("rating"),
-            "google_review_count": place.get("userRatingCount"),
-            "_google_enriched": True,
-        })
+        return results
     log.info("Google Places discovery complete | city=%s | industry=%s | results=%s", city, industry, len(results))
     return results
 
@@ -244,7 +242,7 @@ async def _osm_discover(city: str, industry: str, limit: int) -> list[dict[str, 
             continue
         seen.add(identity)
         results.append({
-            "name": name, "industry": industry, "city": city, "website": website,
+            "name": name, "industry": industry, "city": city, "address": place.get("formattedAddress"), "website": website,
             "phone": tags.get("phone") or tags.get("contact:phone"),
             "email": tags.get("email") or tags.get("contact:email"),
             "source": "openstreetmap_overpass", "source_attribution": "© OpenStreetMap contributors",
@@ -263,7 +261,7 @@ async def discover_businesses(city: str, industry: str, limit: int = 50) -> list
 
     # Google Places is the primary discovery source when its server-side key is configured.
     # This prevents transient public Overpass outages from blocking lead searches.
-    google_results = await _google_discover(city, industry, min(limit, 20))
+    google_results = await _google_discover(city, industry, min(limit, 50))
     if google_results:
         return google_results
 

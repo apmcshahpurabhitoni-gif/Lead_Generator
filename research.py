@@ -10,6 +10,7 @@ from discovery import normalize_website, request
 
 MAX_PAGES=5
 MAX_BYTES=1_500_000
+from config import APP_VERSION
 MAX_LINKS_PER_PAGE=20
 MAX_PROFILE_LINKS=20
 _robots_cache: dict[str, RobotFileParser|None]={}
@@ -102,14 +103,14 @@ async def robots_allowed(website:str,target:str)->bool:
     parser=_robots_cache[host]
     if parser is None:return False
     if not parser.entries and not parser.default_entry:return True
-    return parser.can_fetch("LeadHunter",target)
+    return parser.can_fetch(f"LeadHunter/{APP_VERSION}",target)
 
 async def research_business(business:dict[str,Any])->dict[str,Any]:
-    website=normalize_website(business.get("website")); result={"industry":business.get("industry"),"website":{"exists":bool(website),"pages":[],"errors":[],"robots_checked":False},"seo":{},"local":{},"search":{"status":"NOT_CONFIGURED","organic_rank":None},"google":{"local_rank":business.get("google_local_rank"),"match_confidence":business.get("google_match_confidence"),"maps_url":business.get("google_maps_url"),"rating":business.get("google_rating"),"review_count":business.get("google_review_count")},"profiles":{},"technology":{"signals":[]},"buying_signals":[],"problems":[]}
+    website=normalize_website(business.get("website")); result={"industry":business.get("industry"),"research_status":"STARTED","confidence":0,"website":{"exists":bool(website),"pages":[],"errors":[],"robots_checked":False},"seo":{},"local":{},"search":{"status":"NOT_CONFIGURED","organic_rank":None},"google":{"local_rank":business.get("google_local_rank"),"match_confidence":business.get("google_match_confidence"),"maps_url":business.get("google_maps_url"),"rating":business.get("google_rating"),"review_count":business.get("google_review_count")},"profiles":{},"profile_check_note":"Only public profile links published by the business website are reported; third-party directory absence is not established.","technology":{"signals":[]},"buying_signals":[],"problems":[]}
     if not website:
-        result["problems"].append("No official website was found from the discovery source or Google Places."); result["seo"]={"score":0,"reason":"No verified website"}; result["local"]={"phone_found":bool(business.get("phone")),"email_found":bool(business.get("email")),"city":business.get("city")}; return result
+        result["problems"].append("No official website was found from the discovery source or Google Places."); result["seo"]={"score":0,"reason":"No verified website"}; result["research_status"]="PARTIAL"; result["confidence"]=55; result["local"]={"phone_found":bool(business.get("phone")),"email_found":bool(business.get("email")),"city":business.get("city")}; return result
     if not await robots_allowed(website,website+"/"):
-        result["website"]["robots_checked"]=True; result["website"]["errors"].append("Website could not be crawled under its robots policy."); result["problems"].append("Website could not be crawled under the site's robots policy."); return result
+        result["website"]["robots_checked"]=True; result["website"]["errors"].append("Website could not be crawled under its robots policy."); result["problems"].append("Website could not be crawled under the site's robots policy."); result["research_status"]="UNAVAILABLE"; result["confidence"]=35; return result
     result["website"]["robots_checked"]=True; queue=deque([website]); seen=set()
     while queue and len(seen)<MAX_PAGES:
         url=queue.popleft()
@@ -126,7 +127,7 @@ async def research_business(business:dict[str,Any])->dict[str,Any]:
         except Exception as exc: result["website"]["errors"].append(f"{url}: {type(exc).__name__}")
     pages=result["website"]["pages"]
     if not pages:
-        result["problems"].append("Website was found but could not be successfully researched."); result["seo"]={"score":0,"reason":"No readable pages"}; return result
+        result["problems"].append("Website was found but could not be successfully researched."); result["seo"]={"score":0,"reason":"No readable pages"}; result["research_status"]="UNAVAILABLE"; result["confidence"]=35; return result
     profile_links={}
     for page in pages:
         for kind,urls in (page.get("profile_links") or {}).items(): profile_links.setdefault(kind,[]).extend(urls)
@@ -141,4 +142,4 @@ async def research_business(business:dict[str,Any])->dict[str,Any]:
     result["local"]={"phone_found":bool(home["phones"] or business.get("phone")),"email_found":bool(home["emails"] or business.get("email")),"phones":list(dict.fromkeys((home["phones"] or [])+[business.get("phone")] if business.get("phone") else home["phones"]))[:5],"emails":list(dict.fromkeys((home["emails"] or [])+[business.get("email")] if business.get("email") else home["emails"]))[:5],"city":business.get("city")}
     if result["local"]["phones"] and not business.get("phone"):business["phone"]=result["local"]["phones"][0]
     if result["local"]["emails"] and not business.get("email"):business["email"]=result["local"]["emails"][0]
-    result["technology"]={"signals":sorted(set(x for p in pages for x in p.get("technology",[])))}; return result
+    result["technology"]={"signals":sorted(set(x for p in pages for x in p.get("technology",[])))}; result["research_status"]="COMPLETE"; result["confidence"]=90 if not result["website"]["errors"] else 75; return result

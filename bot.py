@@ -3,15 +3,14 @@ from datetime import datetime,timedelta,timezone
 from telegram import InlineKeyboardButton,InlineKeyboardMarkup,Update
 from telegram.ext import Application,CallbackQueryHandler,CommandHandler
 from database import Database
-from discovery import discover_businesses
-from research import research_business,google_places_enrich
-from scoring import score_lead
+from lead_workflow import process_candidates
+from constants import BUSINESS_TYPES, PIPELINE_STATUSES
 from ai import generate_whatsapp_message
 log=logging.getLogger(__name__)
 PAGE_SIZE=8
 MAX_RESEARCH_PER_SEARCH=10
-BUSINESSES=[("🦷 Dental / Dentist","dental"),("🏥 Hospital","hospital"),("🩺 Clinic","clinic"),("🍽️ Restaurant","restaurant"),("☕ Cafe","cafe"),("🥐 Bakery","bakery"),("🏨 Hotel","hotel"),("🌴 Resort","resort"),("🎓 School","school"),("🏫 College","college"),("🎓 University","university"),("💊 Pharmacy","pharmacy"),("🏋️ Gym / Fitness","gym"),("💇 Salon","salon"),("💄 Beauty","beauty"),("🚗 Car Dealer","car dealer"),("🔧 Car Repair","car repair"),("🚿 Car Wash","car wash"),("🏠 Real Estate","real estate"),("⚖️ Lawyer","lawyer"),("🧾 Accountant","accountant"),("✈️ Travel Agency","travel agency"),("📱 Electronics","electronics"),("👕 Clothing","clothing"),("🛋️ Furniture","furniture"),("💎 Jewellery","jewellery"),("🛒 Supermarket","supermarket"),("🔨 Hardware","hardware"),("🏦 Bank","bank"),("🛡️ Insurance","insurance"),("🏛️ Architect","architect"),("🏗️ Construction","construction"),("🖨️ Printing","printing"),("📸 Photographer","photographer"),("⛽ Fuel Station","fuel"),("🐾 Veterinary","veterinary"),("🌐 All Supported Businesses","all")]
-STATUS_OPTIONS=[("📞 Called","CONTACTED"),("💬 Responded","RESPONDED"),("📅 Meeting","MEETING"),("📄 Proposal","PROPOSAL"),("🤝 Negotiation","NEGOTIATION"),("💰 Won","WON"),("❌ Lost","LOST"),("🚫 Not interested","NOT_INTERESTED")]
+BUSINESSES=BUSINESS_TYPES + [("🌐 All Supported Businesses","all")]
+STATUS_OPTIONS=[("📞 Called","CONTACTED"),("💬 Responded","RESPONDED"),("📅 Meeting","MEETING"),("📄 Proposal","PROPOSAL"),("🤝 Negotiation","NEGOTIATION"),("💰 Won","WON"),("❌ Lost","LOST"),("🚫 Not interested","NOT_INTERESTED"),("🛑 Do not contact","DO_NOT_CONTACT")]
 PROFILE_NAMES={"linkedin":"LinkedIn","justdial":"Justdial","facebook":"Facebook","instagram":"Instagram","youtube":"YouTube","x":"X / Twitter","google_business":"Google Maps","sulekha":"Sulekha","indiamart":"IndiaMART"}
 def authorized(u):
  a=os.getenv("ADMIN_TELEGRAM_ID","").strip(); return not a or (u.effective_user and str(u.effective_user.id)==a)
@@ -47,7 +46,7 @@ def profile_text(r):
  return "\n".join(lines)
 def lead_text(l,r):
  g=r.get("google",{}); loc=r.get("local",{}); s=r.get("search",{}); score=int(l.get("score",0) or 0); rank=g.get("local_rank"); q=html.escape(str(s.get("query") or f"{l.get('industry')} in {l.get('city')}")); phone=l.get("phone") or (loc.get("phones") or [None])[0]; email=l.get("email") or (loc.get("emails") or [None])[0]
- gl=f"📍 <b>Google Local Position:</b> #{rank} for <i>{q}</i>" if rank else "📍 <b>Google Local Position:</b> Not measured"
+ gl=f"📍 <b>Google Places result position:</b> #{rank} for <i>{q}</i>" if rank else "📍 <b>Google Places result position:</b> Not measured"
  br=r.get("score_breakdown") or [("Base opportunity",30)]; why="\n".join(f"• {html.escape(str(k))}: <b>+{v}</b>" for k,v in br if v)
  probs="\n".join("🔴 "+html.escape(str(x)) for x in (l.get("problems") or [])[:8]) or "✅ No major problem recorded."
  return f"{icon(score)} <b>{html.escape(str(l.get('name','Unnamed Business')))}</b>\n━━━━━━━━━━━━━━━━━━━━\n🆔 <b>Lead #:</b> {l.get('id','—')}\n📍 <b>Location:</b> {html.escape(str(l.get('city') or '—'))}\n🏢 <b>Business:</b> {html.escape(str(l.get('industry') or '—'))}\n🌐 <b>Website:</b> {html.escape(str(l.get('website') or 'Not found'))}\n📞 <b>Phone:</b> {html.escape(str(phone or 'Not found'))}\n✉️ <b>Email:</b> {html.escape(str(email or 'Not found'))}\n\n{gl}\n🔎 <b>Google Organic Position:</b> Not measured\n⭐ <b>Google Rating:</b> {g.get('rating') or 'Not found'} · 💬 <b>Reviews:</b> {g.get('review_count') or 'Not found'}\n\n{profile_text(r)}\n\n🎯 <b>OPPORTUNITY SCORE: {score}/100</b>\nℹ️ This is a <b>sales-opportunity score</b>, not a Google ranking.\n📌 <b>Priority:</b> {html.escape(str(l.get('priority') or '—'))}\n🧭 <b>Status:</b> {html.escape(str(l.get('status') or 'NEW'))}\n💼 <b>Recommended Pitch:</b> {html.escape(', '.join(l.get('recommended_services') or []) or 'Audit first')}\n\n💡 <b>WHY WE ARE PITCHING</b>\n{why}\n\n🚨 <b>VERIFIED EVIDENCE</b>\n{probs}"
@@ -74,23 +73,21 @@ async def show_hot(q,app,page=0):
  if not rows: await edit(q,"🔥 <b>HOT LEADS</b>\n━━━━━━━━━━━━━━━━━━━━\n\nNo hot leads yet.\n\nℹ️ Hot = Opportunity Score ≥80.",menu()); return
  await edit(q,"🔥 <b>HOT LEADS · PAGE %s</b>\n━━━━━━━━━━━━━━━━━━━━\n\n%s"%(page+1,"\n".join(f"{icon(x.get('score'))} <b>{html.escape(str(x.get('name')))}</b> · {x.get('score',0)}/100" for x in rows)),saved_kb(rows,page,more))
 async def run_find(app,city,industry,chat_id):
- db=app.bot_data["db"]; job=await db.create_job("DISCOVERY",city,industry); saved=failed=0
- try:
-  candidates=await discover_businesses(city,industry,50); google=await google_places_enrich(city,industry,candidates)
-  for i,c in enumerate(candidates):
-   try:
-    if i<MAX_RESEARCH_PER_SEARCH: r=await research_business(c)
-    else: r={"website":{"exists":bool(c.get('website'))},"seo":{"score":100 if c.get('website') else 0},"local":{"phone_found":bool(c.get('phone')),"email_found":bool(c.get('email'))},"google":{},"search":{},"profiles":{},"problems":[]}
-    r["search"]["query"]=google.get("query"); r["google"]={**r.get("google",{}),"local_rank":c.get("google_local_rank"),"rating":c.get("google_rating"),"review_count":c.get("google_review_count"),"maps_url":c.get("google_maps_url")}; sc=score_lead(r); r["score_breakdown"]=sc.get("breakdown",[])
-    bid,_=await db.upsert_business(c)
-    if bid: await db.save_research_and_score(bid,r,sc); saved+=1
-    else: failed+=1
-   except Exception: failed+=1; log.exception("lead processing failed")
-  if job: await db.finish_job(job,len(candidates),saved,failed)
-  await app.bot.send_message(chat_id,f"✅ <b>SEARCH COMPLETE</b>\n━━━━━━━━━━━━━━━━━━━━\n📍 {html.escape(city)}\n🏢 {html.escape(label(industry))}\n\n📥 Found: <b>{len(candidates)}</b>\n🔎 Google enrichment: <b>{google.get('status')}</b>\n🌐 Website research also checks publicly published profile/directory links.\n🧪 Fully researched: <b>{min(len(candidates),MAX_RESEARCH_PER_SEARCH)}</b>\n💾 Saved: <b>{saved}</b>\n⚠️ Failed: <b>{failed}</b>\n\n👇 <b>Open 📚 SAVED LEADS and tap a numbered lead.</b>",parse_mode="HTML",reply_markup=menu())
- except Exception as e:
-  if job: await db.finish_job(job,0,0,1,str(e)[:1000])
-  await app.bot.send_message(chat_id,"❌ <b>SEARCH FAILED</b>\n━━━━━━━━━━━━━━━━━━━━\n\n"+html.escape(str(e)[:900]),parse_mode="HTML",reply_markup=menu())
+    db=app.bot_data["db"]; job=await db.create_job("DISCOVERY",city,industry); saved=failed=0
+    try:
+        from discovery import discover_businesses
+        candidates=await discover_businesses(city,industry,50)
+        if not job: raise RuntimeError("Could not create discovery job")
+        saved,failed=await process_candidates(db,job,candidates,industry,city)
+        await db.finish_job(job,len(candidates),saved,failed)
+        await app.bot.send_message(chat_id,
+            f"✅ <b>SEARCH COMPLETE</b>\n━━━━━━━━━━━━━━━━━━━━\n📍 {html.escape(city)}\n🏢 {html.escape(label(industry))}\n\n"
+            f"📥 Found: <b>{len(candidates)}</b>\n🔎 Research: <b>real research only</b>\n💾 Saved: <b>{saved}</b>\n⚠️ Failed: <b>{failed}</b>",
+            parse_mode="HTML",reply_markup=menu())
+    except Exception as e:
+        if job: await db.finish_job(job,0,saved,max(failed,1),str(e)[:1000])
+        await app.bot.send_message(chat_id,"❌ <b>SEARCH FAILED</b>\n━━━━━━━━━━━━━━━━━━━━\n\n"+html.escape(str(e)[:900]),parse_mode="HTML",reply_markup=menu())
+
 async def start(u,c):
  if authorized(u):
   v=c.application.bot_data.get("version","unknown"); await u.effective_message.reply_text(f"🚀 <b>LEADHUNTER</b>\n━━━━━━━━━━━━━━━━━━━━\n📦 Running Version: <b>v{html.escape(str(v))}</b>\n\n🎯 Discover → verify contacts → check Google visibility → research → score → pitch.\n\n👇 <b>Choose an action:</b>",parse_mode="HTML",reply_markup=menu())
@@ -100,7 +97,7 @@ async def version_command(u,c):
  text=f"📦 <b>LEADHUNTER VERSION</b>\n━━━━━━━━━━━━━━━━━━━━\n\n🤖 Running: <b>v{html.escape(str(v))}</b>\n📅 Release: <b>{html.escape(str(d))}</b>\n\n🆕 <b>WHAT'S NEW</b>\n"+"\n".join(notes)
  await u.effective_message.reply_text(text,parse_mode="HTML",reply_markup=menu())
 async def help_command(u,c):
- if authorized(u): await u.effective_message.reply_text("❓ <b>HELP</b>\n━━━━━━━━━━━━━━━━━━━━\n\n📚 Saved Leads = every saved business\n🎯 Opportunity Score = sales opportunity, NOT Google rank\n📍 Google Local Position = tested Google Places position when API is connected\n🔎 Organic Google Position = not claimed without a compliant rank source\n📞 Phone + ✉️ email = shown when publicly found\n🌐 Public profiles/directories = captured when the business website publishes the link\n\n🔐 No automatic WhatsApp/email sending or tracking.\n\n📦 Use /version anytime to see the exact running version and What's New.",parse_mode="HTML",reply_markup=menu())
+ if authorized(u): await u.effective_message.reply_text("❓ <b>HELP</b>\n━━━━━━━━━━━━━━━━━━━━\n\n📚 Saved Leads = every saved business\n🎯 Opportunity Score = sales opportunity, NOT Google rank\n📍 Google Places result position = tested Google Places position when API is connected\n🔎 Organic Google Position = not claimed without a compliant rank source\n📞 Phone + ✉️ email = shown when publicly found\n🌐 Public profiles/directories = captured when the business website publishes the link\n\n🔐 No automatic WhatsApp/email sending or tracking.\n\n📦 Use /version anytime to see the exact running version and What's New.",parse_mode="HTML",reply_markup=menu())
 async def find_command(u,c):
  if not authorized(u): return
  if len(c.args)<2: await u.effective_message.reply_text("🔎 <b>FIND LEADS</b>\n\nExample: <code>/find Jabalpur dental</code>",parse_mode="HTML",reply_markup=biz_menu()); return
