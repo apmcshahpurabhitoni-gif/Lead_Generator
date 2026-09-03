@@ -1,152 +1,388 @@
+"""LeadHunter dashboard.
+
+Single canonical dashboard surface. The dashboard owns its page, API routes,
+responsive frontend, discovery orchestration and Telegram handoff. Discovery,
+research, scoring and persistence remain in their dedicated modules.
+"""
 import base64
 import html
+import json
+import logging
 import os
 import secrets
+from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
+from ai import generate_whatsapp_message
 from database import Database
+from discovery import discover_businesses
+from research import research_business
+from scoring import score_lead
 
+log = logging.getLogger(__name__)
 router = APIRouter()
 
+BUSINESS_TYPES = [
+    ("🦷 Dental / Dentist", "dental"), ("🏥 Hospital", "hospital"), ("🩺 Clinic", "clinic"),
+    ("🍽️ Restaurant", "restaurant"), ("☕ Cafe", "cafe"), ("🥐 Bakery", "bakery"),
+    ("🏨 Hotel", "hotel"), ("🌴 Resort", "resort"), ("🎓 School", "school"),
+    ("🏫 College", "college"), ("🎓 University", "university"), ("💊 Pharmacy", "pharmacy"),
+    ("🏋️ Gym / Fitness", "gym"), ("💇 Salon", "salon"), ("💄 Beauty", "beauty"),
+    ("🚗 Car Dealer", "car dealer"), ("🔧 Car Repair", "car repair"), ("🚿 Car Wash", "car wash"),
+    ("🏠 Real Estate", "real estate"), ("⚖️ Lawyer", "lawyer"), ("🧾 Accountant", "accountant"),
+    ("✈️ Travel Agency", "travel agency"), ("📱 Electronics", "electronics"), ("👕 Clothing", "clothing"),
+    ("🛋️ Furniture", "furniture"), ("💎 Jewellery", "jewellery"), ("🛒 Supermarket", "supermarket"),
+    ("🔨 Hardware", "hardware"), ("🏦 Bank", "bank"), ("🛡️ Insurance", "insurance"),
+    ("🏛️ Architect", "architect"), ("🏗️ Construction", "construction"), ("🖨️ Printing", "printing"),
+    ("📸 Photographer", "photographer"), ("⛽ Fuel Station", "fuel"), ("🐾 Veterinary", "veterinary"),
+]
+CITIES = [
+    "Bhopal", "Indore", "Jabalpur", "Gwalior", "Ujjain", "Sagar", "Rewa", "Satna", "Dewas", "Ratlam",
+    "Burhanpur", "Khandwa", "Chhindwara", "Vidisha", "Shivpuri", "Morena", "Singrauli", "Damoh", "Mandsaur",
+    "Neemuch", "Sehore", "Betul", "Itarsi", "Narmadapuram", "Khargone", "Barwani", "Dhar", "Datia", "Bhind",
+    "Balaghat", "Chhatarpur", "Tikamgarh", "Panna", "Raisen", "Rajgarh", "Shajapur", "Agar Malwa", "Alirajpur",
+    "Anuppur", "Ashoknagar", "Dindori", "Harda", "Jhabua", "Katni", "Mandla", "Narsinghpur", "Sheopur", "Sidhi", "Umaria",
+]
 STAGES = [
-    ("NEW", "🔎 Discovered"),
-    ("VERIFIED", "🧹 Verified"),
-    ("QUALIFIED", "🎯 Qualified"),
-    ("RESEARCHED", "📋 Researched"),
-    ("MESSAGE_GENERATED", "✉️ Message generated"),
-    ("CONTACTED", "📤 Contacted"),
-    ("RESPONDED", "💬 Replied"),
-    ("MEETING", "📅 Meeting"),
-    ("PROPOSAL", "📄 Proposal"),
-    ("WON", "💰 Won"),
-    ("LOST", "❌ Lost"),
+    "NEW", "VERIFIED", "RESEARCHED", "QUALIFIED", "MESSAGE_GENERATED", "CONTACTED",
+    "RESPONDED", "MEETING", "PROPOSAL", "NEGOTIATION", "WON", "LOST",
 ]
 
 
-def authorized(value: str | None) -> bool:
-    user = os.getenv("DASHBOARD_USER", "")
-    password = os.getenv("DASHBOARD_PASSWORD", "")
+def auth(value: str | None) -> None:
+    user = os.getenv("DASHBOARD_USER", "").strip()
+    password = os.getenv("DASHBOARD_PASSWORD", "").strip()
     if not user or not password or not value or not value.startswith("Basic "):
-        return False
+        raise HTTPException(401, "Dashboard authentication required", headers={"WWW-Authenticate": "Basic"})
     try:
-        decoded = base64.b64decode(value[6:]).decode()
+        decoded = base64.b64decode(value[6:]).decode("utf-8")
         supplied_user, supplied_password = decoded.split(":", 1)
-        return secrets.compare_digest(supplied_user, user) and secrets.compare_digest(supplied_password, password)
     except Exception:
-        return False
+        raise HTTPException(401, "Invalid dashboard credentials", headers={"WWW-Authenticate": "Basic"})
+    if not (secrets.compare_digest(supplied_user, user) and secrets.compare_digest(supplied_password, password)):
+        raise HTTPException(401, "Invalid dashboard credentials", headers={"WWW-Authenticate": "Basic"})
 
 
-def require_dashboard(authorization: str | None) -> None:
-    if not authorized(authorization):
-        raise HTTPException(status_code=401, detail="Dashboard authentication required", headers={"WWW-Authenticate": "Basic"})
+class DiscoveryRequest(BaseModel):
+    business_type: str
+    city: str
+    limit: int = 20
 
 
-class StatusUpdate(BaseModel):
+class StatusRequest(BaseModel):
     status: str
 
 
-def _esc(value: Any) -> str:
-    return html.escape(str(value if value is not None else ""), quote=True)
+async def _run_discovery(job_id: int, city: str, industry: str, limit: int) -> None:
+    db = Database()
+    processed = saved = failed = 0
+    try:
+        candidates = await discover_businesses(city, industry, limit)
+        for candidate in candidates:
+            processed += 1
+            try:
+                research = await research_business(candidate)
+                research["search"] = {**(research.get("search") or {}), "query": f"{industry} in {city}"}
+                research["google"] = {
+                    **(research.get("google") or {}),
+                    "local_rank": candidate.get("google_local_rank"),
+                    "match_confidence": candidate.get("google_match_confidence"),
+                    "rating": candidate.get("google_rating"),
+                    "review_count": candidate.get("google_review_count"),
+                    "maps_url": candidate.get("google_maps_url"),
+                }
+                score = score_lead(research)
+                research["score_breakdown"] = score.get("breakdown", [])
+                business_id, _ = await db.upsert_business(candidate)
+                if not business_id:
+                    failed += 1
+                    continue
+                await db.save_research_and_score(business_id, research, score)
+                await db.add_search_result(job_id, business_id)
+                saved += 1
+            except Exception:
+                failed += 1
+                log.exception("dashboard discovery item failed | city=%s industry=%s", city, industry)
+        await db.finish_job(job_id, processed, saved, failed)
+    except Exception as exc:
+        log.exception("dashboard discovery failed | city=%s industry=%s", city, industry)
+        await db.finish_job(job_id, processed, saved, max(failed, 1), str(exc)[:1000])
 
 
 @router.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(authorization: str | None = Header(default=None)):
-    require_dashboard(authorization)
-    db = Database()
-    stats = await db.today_stats()
-    history = await db.history(14)
-
-    cards = [
-        ("🔎", "Leads", stats["leads_found"]), ("🎯", "Qualified", stats["qualified"]),
-        ("🔥", "Hot", stats["hot_leads"]), ("📞", "Calls", stats["calls"]),
-        ("💬", "Contacted", stats["contacted"]), ("↩️", "Replies", stats["replies"]),
-        ("📅", "Meetings", stats["meetings"]), ("📄", "Proposals", stats["proposals"]),
-        ("💰", "Won", stats["won"]), ("❌", "Lost", stats["lost"]),
-    ]
-    cards_html = "".join(
-        f'<article class="stat"><span class="stat-icon">{icon}</span><span><small>{_esc(label)}</small><strong>{value}</strong></span></article>'
-        for icon, label, value in cards
-    )
-    rows = "".join(
-        f'<tr><td>{_esc(row.get("date", ""))}</td><td>{row.get("leads_found", 0)}</td><td>{row.get("contacted", 0)}</td><td>{row.get("replies", 0)}</td><td>{row.get("meetings", 0)}</td><td>{row.get("won", 0)}</td></tr>'
-        for row in history
-    ) or '<tr><td colspan="6">No history yet.</td></tr>'
-
-    template = r'''<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#080d18">
-<title>LeadHunter · Lead Intelligence</title>
-<style>
-:root{color-scheme:dark;--bg:#070b15;--panel:#0d1424;--panel2:#111b2e;--panel3:#17233a;--line:#22304a;--text:#f7f9ff;--muted:#8996b1;--accent:#8b5cf6;--cyan:#22d3ee;--green:#34d399;--orange:#fb923c;--yellow:#fbbf24;--radius:18px}
-*{box-sizing:border-box}html,body{width:100%;min-width:0;overflow-x:hidden}body{margin:0;background:radial-gradient(circle at 5% -5%,rgba(139,92,246,.18),transparent 30%),radial-gradient(circle at 100% 0%,rgba(34,211,238,.10),transparent 26%),var(--bg);color:var(--text);font:14px/1.5 Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}button,input{font:inherit}button{cursor:pointer}a{color:inherit;text-decoration:none}
-.app{min-height:100dvh;display:grid;grid-template-columns:240px minmax(0,1fr)}.sidebar{position:sticky;top:0;height:100dvh;padding:20px 14px;border-right:1px solid var(--line);background:rgba(7,11,21,.9);backdrop-filter:blur(20px);z-index:10}.brand{display:flex;align-items:center;gap:11px;padding:5px 8px 20px}.brand-mark{width:40px;height:40px;flex:0 0 40px;display:grid;place-items:center;border-radius:13px;background:linear-gradient(135deg,var(--accent),var(--cyan));font-size:21px;box-shadow:0 10px 30px rgba(139,92,246,.28)}.brand strong{display:block;font-size:17px}.brand small{display:block;color:var(--muted)}.nav{display:grid;gap:3px}.nav-label{padding:16px 9px 7px;color:#61708c;font-size:10px;font-weight:800;letter-spacing:.14em;text-transform:uppercase}.nav button{width:100%;border:0;background:transparent;color:#aeb9cf;text-align:left;padding:10px 11px;border-radius:11px}.nav button:hover,.nav button.active{background:var(--panel2);color:#fff}
-.main{min-width:0;padding:26px clamp(14px,3vw,38px) 50px}.topbar{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin-bottom:22px}.eyebrow{color:var(--cyan);font-size:11px;font-weight:800;letter-spacing:.13em;text-transform:uppercase}h1{margin:3px 0;font-size:clamp(28px,3vw,38px);line-height:1.08;letter-spacing:-.045em}.muted{color:var(--muted)}.top-actions{display:flex;gap:8px}.btn{border:1px solid var(--line);background:var(--panel);color:var(--text);border-radius:11px;padding:9px 13px}.btn.primary{border-color:transparent;background:linear-gradient(135deg,#7c3aed,#06b6d4);font-weight:800}
-.stats{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-bottom:22px}.stat{min-width:0;display:flex;align-items:center;gap:10px;padding:14px;background:linear-gradient(180deg,#111b2e,#0c1424);border:1px solid var(--line);border-radius:15px}.stat-icon{font-size:21px;line-height:1}.stat small{display:block;color:var(--muted);font-size:12px;white-space:nowrap}.stat strong{display:block;font-size:24px;line-height:1.05}
-.workspace{display:grid;grid-template-columns:220px minmax(0,1fr);gap:13px;align-items:start}.panel{min-width:0;background:rgba(13,20,36,.92);border:1px solid var(--line);border-radius:var(--radius);box-shadow:0 20px 60px rgba(0,0,0,.2)}.categories{padding:10px;position:sticky;top:16px}.category{width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;border:0;background:transparent;color:#aeb9cf;text-align:left;padding:10px;border-radius:10px}.category:hover,.category.active{background:var(--panel3);color:#fff}.category .count{font-size:11px;color:#71809b}.content{overflow:hidden}.content-head{padding:18px 18px 13px}.content-head-row{display:flex;align-items:center;justify-content:space-between;gap:12px}.content-head h2{margin:2px 0 0;font-size:20px}.search{display:flex;gap:8px;margin-top:14px}.search input{width:100%;min-width:0;border:1px solid var(--line);background:#09111f;color:#fff;border-radius:11px;padding:11px 13px;outline:none}.locations{display:flex;gap:7px;overflow-x:auto;padding:2px 18px 13px}.tab{flex:0 0 auto;border:1px solid var(--line);background:#0a1220;color:#9da8c0;padding:8px 12px;border-radius:999px;white-space:nowrap}.tab.active{background:rgba(139,92,246,.18);border-color:rgba(139,92,246,.55);color:#fff}
-.leads{padding:0 12px 14px}.lead{min-width:0;border:1px solid var(--line);background:linear-gradient(180deg,#101a2c,#0d1626);border-radius:14px;margin-top:8px;overflow:hidden}.lead.open{border-color:#5b4a87;box-shadow:0 14px 36px rgba(0,0,0,.22)}.lead-summary{min-width:0;min-height:58px;display:grid;grid-template-columns:minmax(150px,2fr) minmax(90px,1fr) 65px 65px minmax(100px,1fr) auto auto;align-items:center;gap:10px;padding:9px 11px;cursor:pointer}.lead-name,.lead-meta{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.lead-name{font-weight:750}.lead-meta{color:#8f9ab4}.rating{color:#fcd34d;white-space:nowrap}.score{font-weight:850;white-space:nowrap}.score.hot{color:var(--orange)}.score.warm{color:var(--yellow)}.status-pill{justify-self:start;border:1px solid var(--line);padding:4px 8px;border-radius:999px;color:#c8d0df;font-size:11px;white-space:nowrap}.google{justify-self:end;border:1px solid #33405e;background:#151e33;color:#e8edff;border-radius:9px;padding:7px 9px;font-weight:700;white-space:nowrap}.chevron{color:#72809d;transition:.18s}.lead.open .chevron{transform:rotate(180deg)}
-.details{display:none;border-top:1px solid var(--line);padding:14px}.lead.open .details{display:block}.detail-grid{display:grid;grid-template-columns:1.2fr 1fr;gap:12px}.section{min-width:0;background:#0b1322;border:1px solid #202c44;border-radius:12px;padding:13px}.section h3{margin:0 0 10px;font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:#8490aa}.facts{display:grid;grid-template-columns:105px minmax(0,1fr);gap:7px;font-size:13px}.facts b{color:#7f8ba5}.facts span{overflow-wrap:anywhere}.links,.opps{display:flex;flex-wrap:wrap;gap:7px}.link{border:1px solid var(--line);padding:7px 9px;border-radius:9px;background:#131b2e;color:#dce3f3}.opp{padding:6px 8px;border-radius:8px;background:#172039;border:1px solid #273452;color:#cfd7e8;font-size:12px}.status-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.status-check{display:flex;align-items:center;gap:7px;padding:8px;border:1px solid #222d45;border-radius:9px;background:#111a2c;color:#9da8bf;cursor:pointer}.status-check.active{border-color:rgba(52,211,153,.4);background:rgba(52,211,153,.08);color:#dcfce7}.status-check input{accent-color:var(--green)}.activity{margin-top:8px;color:#8f9ab2;font-size:12px}.detail-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:12px}.empty{padding:50px 20px;text-align:center;color:#7f8aa2}.empty strong{display:block;color:#dfe5f3;font-size:16px;margin-bottom:5px}.spinner{width:16px;height:16px;border:2px solid #53617b;border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;display:inline-block;vertical-align:-3px}.toast{position:fixed;right:18px;bottom:18px;z-index:30;background:#151e33;border:1px solid #394866;color:#fff;padding:11px 14px;border-radius:11px;opacity:0;transform:translateY(10px);pointer-events:none;transition:.2s}.toast.show{opacity:1;transform:translateY(0)}.history{margin-top:20px;padding:18px;overflow:hidden}.history h2{margin:0 0 13px;font-size:18px}.table-wrap{overflow-x:auto}table{width:100%;min-width:520px;border-collapse:collapse}th,td{padding:10px 8px;text-align:left;border-bottom:1px solid var(--line);color:#b9c2d5}th{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#727e98}@keyframes spin{to{transform:rotate(360deg)}}
-@media(max-width:1100px){.stats{grid-template-columns:repeat(3,minmax(0,1fr))}.lead-summary{grid-template-columns:minmax(150px,2fr) 1fr 65px 65px auto auto}.status-pill{display:none}}
-@media(max-width:820px){.app{display:block}.sidebar{position:relative;top:auto;height:auto;padding:10px 12px;border-right:0;border-bottom:1px solid var(--line)}.brand{padding:4px 4px 10px}.nav-label{display:none}.nav{display:flex;gap:4px;overflow-x:auto}.nav button{width:auto;flex:0 0 auto;white-space:nowrap}.workspace{grid-template-columns:1fr}.categories{position:relative;top:auto;display:flex;gap:5px;overflow-x:auto;padding:8px}.categories .nav-label{display:none}.category{width:auto;min-width:max-content;white-space:nowrap}.detail-grid{grid-template-columns:1fr}}
-@media(max-width:620px){.main{padding:15px 10px 32px}.topbar{display:block;margin-bottom:17px}.topbar h1{font-size:30px}.top-actions{display:grid;grid-template-columns:1fr 1fr;margin-top:13px}.top-actions .btn{width:100%;padding:10px 7px}.stats{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-bottom:15px}.stat{padding:11px 9px;border-radius:14px}.stat-icon{font-size:19px}.stat small{font-size:10px}.stat strong{font-size:21px}.content-head{padding:14px 12px 10px}.content-head h2{font-size:18px}.search{margin-top:10px}.locations{padding-left:12px;padding-right:12px}.leads{padding:0 7px 9px}.lead-summary{grid-template-columns:minmax(0,1fr) auto auto;gap:7px;padding:10px;min-height:58px}.lead-meta,.rating,.status-pill{display:none}.lead-name{font-size:14px}.score{font-size:12px}.google{font-size:0;padding:7px 8px}.google:before{content:'🔎';font-size:14px}.details{padding:10px}.facts{grid-template-columns:80px minmax(0,1fr);font-size:12px}.status-grid{grid-template-columns:1fr}.detail-actions{justify-content:stretch}.detail-actions .btn{width:100%}.history{margin-top:14px;padding:12px}.history h2{font-size:16px}}
-@media(max-width:380px){.stats{grid-template-columns:1fr}.top-actions{grid-template-columns:1fr}.main{padding-left:8px;padding-right:8px}}
-@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
-</style>
-</head>
-<body>
-<div class="app">
-<aside class="sidebar"><div class="brand"><div class="brand-mark">🚀</div><div><strong>LeadHunter</strong><small>Lead intelligence</small></div></div><nav class="nav"><div class="nav-label">Workspace</div><button class="active" type="button">🏠 Overview</button><button type="button" onclick="document.getElementById('leadWorkspace').scrollIntoView({behavior:'smooth'})">👥 Leads</button><button type="button" onclick="focusSearch()">🔎 Find / Filter</button><button type="button" onclick="document.getElementById('history').scrollIntoView({behavior:'smooth'})">📊 Analytics</button><button type="button">✉️ Outreach</button><button type="button">⚙️ Settings</button></nav></aside>
-<main class="main">
-<header class="topbar"><div><div class="eyebrow">Lead workspace</div><h1>Business leads</h1><div class="muted">Saved records · locations · research shortcuts</div></div><div class="top-actions"><button class="btn" type="button" onclick="loadLeads()">↻ Refresh</button><button class="btn primary" type="button" onclick="focusSearch()">＋ Search leads</button></div></header>
-<section class="stats">__CARDS__</section>
-<section class="workspace" id="leadWorkspace"><aside class="panel categories" id="categories"><div class="nav-label">Business types</div><div class="empty"><span class="spinner"></span></div></aside><section class="panel content"><div class="content-head"><div class="content-head-row"><div><div class="eyebrow" id="categoryEyebrow">All businesses</div><h2 id="categoryTitle">All leads</h2></div><span class="muted" id="leadCount"></span></div><div class="search"><input id="leadSearch" type="search" autocomplete="off" placeholder="Search business, city, phone or website…" oninput="render()"><button class="btn" type="button" onclick="clearSearch()">Clear</button></div></div><div class="locations" id="locations"></div><div class="leads" id="leads"><div class="empty"><span class="spinner"></span><strong>Loading saved leads…</strong></div></div></section></section>
-<section class="panel history" id="history"><h2>📈 Recent activity</h2><div class="table-wrap"><table><thead><tr><th>Date</th><th>Leads</th><th>Contacted</th><th>Replies</th><th>Meetings</th><th>Won</th></tr></thead><tbody>__ROWS__</tbody></table></div></section>
-</main></div><div class="toast" id="toast"></div>
-<script>
-const stages=__STAGES__;let leads=[];let selectedCategory='ALL';let selectedCity='ALL';let openLead=null;
-const esc=s=>String(s??'').replace(/[&<>\'\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));const norm=s=>String(s??'').trim().toLowerCase();
-function toast(msg){const e=document.getElementById('toast');e.textContent=msg;e.classList.add('show');clearTimeout(window.__toast);window.__toast=setTimeout(()=>e.classList.remove('show'),2200)}
-function googleUrl(l){return 'https://www.google.com/search?q='+encodeURIComponent([l.name,l.city,l.state].filter(Boolean).join(' '))}function mapsUrl(l){return 'https://www.google.com/maps/search/?api=1&query='+encodeURIComponent([l.name,l.city,l.state].filter(Boolean).join(' '))}
-async function loadLeads(){document.getElementById('leads').innerHTML='<div class="empty"><span class="spinner"></span><strong>Loading saved leads…</strong></div>';try{const r=await fetch('/dashboard/api/leads?limit=500');if(!r.ok)throw Error('Failed to load leads');leads=await r.json();buildNavigation();render();toast('Lead database refreshed')}catch(e){document.getElementById('leads').innerHTML='<div class="empty"><strong>Could not load leads</strong><div>'+esc(e.message)+'</div></div>'}}
-function buildNavigation(){const groups={};leads.forEach(l=>{const k=(l.industry||'Other').trim()||'Other';(groups[k]??=[]).push(l)});const cats=document.getElementById('categories');cats.innerHTML='<div class="nav-label">Business types</div>';const all=document.createElement('button');all.className='category '+(selectedCategory==='ALL'?'active':'');all.innerHTML='<span>✨ All businesses</span><span class="count">'+leads.length+'</span>';all.onclick=()=>{selectedCategory='ALL';selectedCity='ALL';buildNavigation();render()};cats.appendChild(all);Object.entries(groups).sort((a,b)=>a[0].localeCompare(b[0])).forEach(([cat,items])=>{const b=document.createElement('button');b.className='category '+(selectedCategory===cat?'active':'');b.innerHTML='<span>'+esc(cat)+'</span><span class="count">'+items.length+'</span>';b.onclick=()=>{selectedCategory=cat;selectedCity='ALL';buildNavigation();render()};cats.appendChild(b)});const locs=leads.filter(l=>selectedCategory==='ALL'||norm(l.industry)===norm(selectedCategory)).reduce((m,l)=>{const c=(l.city||'Unknown').trim()||'Unknown';m[c]=(m[c]||0)+1;return m},{});const locEl=document.getElementById('locations');locEl.innerHTML='';const at=document.createElement('button');at.className='tab '+(selectedCity==='ALL'?'active':'');at.textContent='ALL '+Object.values(locs).reduce((a,b)=>a+b,0);at.onclick=()=>{selectedCity='ALL';render()};locEl.appendChild(at);Object.entries(locs).sort((a,b)=>a[0].localeCompare(b[0])).forEach(([city,count])=>{const t=document.createElement('button');t.className='tab '+(selectedCity===city?'active':'');t.textContent=city+' '+count;t.onclick=()=>{selectedCity=city;render()};locEl.appendChild(t)})}
-function filtered(){const q=norm(document.getElementById('leadSearch').value);return leads.filter(l=>(selectedCategory==='ALL'||norm(l.industry)===norm(selectedCategory))&&(selectedCity==='ALL'||norm(l.city)===norm(selectedCity))&&(!q||[l.name,l.city,l.industry,l.phone,l.website,l.email].some(v=>norm(v).includes(q))))}
-function render(){const list=filtered();document.getElementById('categoryTitle').textContent=selectedCategory==='ALL'?'All leads':selectedCategory;document.getElementById('categoryEyebrow').textContent=selectedCity==='ALL'?'All locations':selectedCity;document.getElementById('leadCount').textContent=list.length+' saved lead'+(list.length===1?'':'s');const el=document.getElementById('leads');if(!list.length){el.innerHTML='<div class="empty"><strong>No leads in this view</strong><div>Run a search or choose another business type/location.</div></div>';return}el.innerHTML=list.map(leadCard).join('')}
-function leadCard(l){const open=openLead===l.id?' open':'';const score=Number(l.score||0);const tone=score>=85?'hot':score>=60?'warm':'';const stage=stages.find(s=>s[0]===l.status)?.[1]||l.status||'🔎 Discovered';const services=(l.recommended_services||[]).slice(0,8).map(x=>'<span class="opp">'+esc(x)+'</span>').join('');const links=(l.website?'<a class="link" target="_blank" rel="noopener noreferrer" href="'+esc(l.website)+'">🌐 Website</a>':'')+'<a class="link" target="_blank" rel="noopener noreferrer" href="'+mapsUrl(l)+'">📍 Maps</a><a class="link" target="_blank" rel="noopener noreferrer" href="'+googleUrl(l)+'">🔎 Search</a>';const checks=stages.map(([key,label])=>'<label class="status-check '+(l.status===key?'active':'')+'"><input type="radio" name="status-'+l.id+'" '+(l.status===key?'checked':'')+' onchange="setStatus('+l.id+',\''+key+'\')">'+label+'</label>').join('');return '<article class="lead'+open+'"><div class="lead-summary" onclick="toggleLead('+l.id+')"><div class="lead-name">'+(l.industry?'🏢 ':'')+esc(l.name)+'</div><div class="lead-meta">📍 '+esc(l.city||'—')+'</div><div class="rating">⭐ '+esc(l.rating??'—')+'</div><div class="score '+tone+'">'+score+'/100</div><span class="status-pill">'+esc(stage)+'</span><button class="google" type="button" onclick="event.stopPropagation();window.open(googleUrl('+JSON.stringify(l)+'),\'_blank\',\'noopener,noreferrer\')">🔎 Google</button><span class="chevron">⌄</span></div><div class="details"><div class="detail-grid"><div class="section"><h3>Business information</h3><div class="facts"><b>Business</b><span>'+esc(l.name)+'</span><b>Category</b><span>'+esc(l.industry||'—')+'</span><b>Location</b><span>'+esc(l.city||'—')+'</span><b>Phone</b><span>'+esc(l.phone||'—')+'</span><b>Email</b><span>'+esc(l.email||'—')+'</span><b>Website</b><span>'+esc(l.website||'—')+'</span><b>Lead score</b><span><strong>'+score+'/100</strong> · '+esc(l.priority||'LOW')+'</span></div></div><div class="section"><h3>Quick research</h3><div class="links">'+links+'</div><div class="opps" style="margin-top:10px">'+(services||'<span class="muted">No recommended services yet</span>')+'</div></div><div class="section"><h3>Lead stage</h3><div class="status-grid">'+checks+'</div></div><div class="section"><h3>Notes & activity</h3><div class="muted">'+esc((l.problems||[]).slice(0,5).join(' · ')||'No problems recorded.')+'</div><div class="activity">'+esc(l.updated_at?'Last updated · '+new Date(l.updated_at).toLocaleString():'No recent update')+'</div><div class="detail-actions"><button class="btn" type="button" onclick="event.stopPropagation();window.open(googleUrl('+JSON.stringify(l)+'),\'_blank\',\'noopener,noreferrer\')">🔎 Research on Google</button></div></div></div></div></article>'}
-function toggleLead(id){openLead=openLead===id?null:id;render()}
-async function setStatus(id,status){try{const r=await fetch('/dashboard/api/leads/'+id+'/status',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status})});if(!r.ok)throw Error('Status update failed');const l=leads.find(x=>x.id===id);if(l)l.status=status;render();toast('Status updated')}catch(e){toast(e.message)}}
-function focusSearch(){const i=document.getElementById('leadSearch');i.focus();i.scrollIntoView({behavior:'smooth',block:'center'})}function clearSearch(){document.getElementById('leadSearch').value='';render();focusSearch()}loadLeads();
-</script>
-</body></html>'''
-
-    stage_json = "[" + ",".join("[" + repr(key) + "," + repr(label) + "]" for key, label in STAGES) + "]"
-    return HTMLResponse(template.replace("__CARDS__", cards_html).replace("__ROWS__", rows).replace("__STAGES__", stage_json))
+    auth(authorization)
+    return HTMLResponse(PAGE)
 
 
 @router.get("/dashboard/api/leads")
-async def dashboard_leads(authorization: str | None = Header(default=None), limit: int = Query(default=500, ge=1, le=1000)):
-    require_dashboard(authorization)
-    return await Database().list_leads(limit=limit)
+async def leads(
+    authorization: str | None = Header(default=None),
+    priority: str | None = None,
+    limit: int = Query(100, ge=1, le=300),
+    offset: int = Query(0, ge=0),
+):
+    auth(authorization)
+    db = Database()
+    rows = await db.list_leads_with_research(priority, limit, offset)
+    return {"ok": True, "leads": rows, "count": len(rows)}
 
 
-@router.patch("/dashboard/api/leads/{business_id}/status")
-async def dashboard_set_status(business_id: int, payload: StatusUpdate, authorization: str | None = Header(default=None)):
-    require_dashboard(authorization)
-    allowed = {key for key, _ in STAGES}
-    status = payload.status.strip().upper()
-    if status not in allowed:
-        raise HTTPException(status_code=400, detail="Invalid lead status")
+@router.get("/dashboard/api/leads/{business_id}")
+async def lead_detail(business_id: int, authorization: str | None = Header(default=None)):
+    auth(authorization)
     db = Database()
     lead = await db.get_lead(business_id)
     if not lead:
-        raise HTTPException(status_code=404, detail="Lead not found")
-    old = lead.get("status") or "NEW"
-    await db.set_status(business_id, status)
-    if old != status:
-        await db.record_activity(business_id, f"STATUS_{status}", "dashboard", f"Status changed from {old} to {status}")
-    return {"ok": True, "business_id": business_id, "status": status}
+        raise HTTPException(404, "Lead not found")
+    return {
+        "ok": True,
+        "lead": lead,
+        "research": await db.get_research(business_id),
+        "activities": await db.activities(business_id, 30),
+    }
+
+
+@router.get("/dashboard/api/searches")
+async def searches(
+    authorization: str | None = Header(default=None),
+    limit: int = Query(30, ge=1, le=100),
+):
+    auth(authorization)
+    return {"ok": True, "searches": await Database().list_searches(limit)}
+
+
+@router.get("/dashboard/api/searches/{search_id}/leads")
+async def search_leads(
+    search_id: int,
+    authorization: str | None = Header(default=None),
+    limit: int = Query(100, ge=1, le=300),
+):
+    auth(authorization)
+    db = Database()
+    search = await db.get_search(search_id)
+    if not search:
+        raise HTTPException(404, "Search not found")
+    rows = await db.list_search_results(search_id, limit)
+    return {"ok": True, "search": search, "leads": rows, "count": len(rows)}
+
+
+@router.post("/dashboard/api/discover")
+async def discover(
+    payload: DiscoveryRequest,
+    background_tasks: BackgroundTasks,
+    authorization: str | None = Header(default=None),
+):
+    auth(authorization)
+    allowed_types = {value for _, value in BUSINESS_TYPES}
+    if payload.business_type not in allowed_types:
+        raise HTTPException(400, "Unsupported business type")
+    if payload.city not in CITIES:
+        raise HTTPException(400, "Unsupported Madhya Pradesh city")
+    limit = min(max(int(payload.limit), 1), 50)
+    db = Database()
+    job_id = await db.create_job("DISCOVERY", payload.city, payload.business_type)
+    if not job_id:
+        raise HTTPException(503, "Could not create discovery job")
+    background_tasks.add_task(_run_discovery, job_id, payload.city, payload.business_type, limit)
+    return {"ok": True, "job_id": job_id, "status": "RUNNING", "city": payload.city, "business_type": payload.business_type, "limit": limit}
+
+
+@router.get("/dashboard/api/jobs/{job_id}")
+async def job_status(job_id: int, authorization: str | None = Header(default=None)):
+    auth(authorization)
+    row = Database().client.table("jobs").select("*").eq("id", job_id).limit(1).execute()
+    return {"ok": True, "job": row.data[0] if row.data else None}
+
+
+@router.get("/dashboard/api/analytics")
+async def analytics(authorization: str | None = Header(default=None)):
+    auth(authorization)
+    leads = await Database().list_leads(None, 1000, 0)
+    total = len(leads)
+    qualified = sum(x.get("status") in {"RESEARCHED", "QUALIFIED", "CONTACTED", "RESPONDED", "MEETING", "PROPOSAL", "NEGOTIATION", "WON"} for x in leads)
+    contacted = sum(x.get("status") in {"CONTACTED", "RESPONDED", "MEETING", "PROPOSAL", "NEGOTIATION", "WON"} for x in leads)
+    won = sum(x.get("status") == "WON" for x in leads)
+    hot = sum(x.get("priority") == "HOT" for x in leads)
+
+    def counts(field: str) -> list[dict[str, Any]]:
+        data: dict[str, int] = {}
+        for row in leads:
+            key = str(row.get(field) or "Unknown")
+            data[key] = data.get(key, 0) + 1
+        return [{"name": k, "count": v} for k, v in sorted(data.items(), key=lambda x: x[1], reverse=True)[:8]]
+
+    services: dict[str, int] = {}
+    for row in leads:
+        for service in row.get("recommended_services") or []:
+            services[str(service)] = services.get(str(service), 0) + 1
+    return {
+        "ok": True,
+        "totals": {"leads": total, "qualified": qualified, "contacted": contacted, "won": won, "hot": hot},
+        "conversion": {
+            "qualified_rate": round(qualified / total * 100, 1) if total else 0,
+            "contact_rate": round(contacted / total * 100, 1) if total else 0,
+            "win_rate": round(won / contacted * 100, 1) if contacted else 0,
+        },
+        "cities": counts("city"),
+        "industries": counts("industry"),
+        "services": [{"name": k, "count": v} for k, v in sorted(services.items(), key=lambda x: x[1], reverse=True)[:8]],
+    }
+
+
+@router.get("/dashboard/api/outreach")
+async def outreach(
+    authorization: str | None = Header(default=None),
+    limit: int = Query(30, ge=1, le=100),
+):
+    auth(authorization)
+    rows = [x for x in await Database().list_leads(None, 1000, 0) if x.get("status") in {"NEW", "RESEARCHED", "QUALIFIED"}]
+    rows.sort(key=lambda x: (0 if x.get("priority") == "HOT" else 1 if x.get("priority") == "HIGH" else 2, -int(x.get("score", 0) or 0)))
+    return {"ok": True, "leads": rows[:limit]}
+
+
+@router.post("/dashboard/api/leads/{business_id}/message")
+async def pitch_message(business_id: int, authorization: str | None = Header(default=None)):
+    auth(authorization)
+    db = Database()
+    lead = await db.get_lead(business_id)
+    if not lead:
+        raise HTTPException(404, "Lead not found")
+    message = await generate_whatsapp_message(lead, await db.get_research(business_id))
+    await db.record_activity(business_id, "MESSAGE_GENERATED", "dashboard", "Pitch message generated")
+    return {"ok": True, "message": message}
+
+
+@router.patch("/dashboard/api/leads/{business_id}/status")
+async def set_lead_status(
+    business_id: int,
+    payload: StatusRequest,
+    authorization: str | None = Header(default=None),
+):
+    auth(authorization)
+    if payload.status not in STAGES:
+        raise HTTPException(400, "Invalid status")
+    db = Database()
+    if not await db.get_lead(business_id):
+        raise HTTPException(404, "Lead not found")
+    await db.set_status(business_id, payload.status)
+    await db.record_activity(business_id, "STATUS_" + payload.status, "dashboard", "Status changed from dashboard")
+    return {"ok": True, "status": payload.status}
+
+
+@router.post("/dashboard/api/leads/{business_id}/telegram")
+async def send_lead_to_telegram(business_id: int, request: Request, authorization: str | None = Header(default=None)):
+    auth(authorization)
+    admin = os.getenv("ADMIN_TELEGRAM_ID", "").strip()
+    if not admin:
+        raise HTTPException(503, "ADMIN_TELEGRAM_ID is not configured")
+    db = Database()
+    lead = await db.get_lead(business_id)
+    if not lead:
+        raise HTTPException(404, "Lead not found")
+    research = await db.get_research(business_id)
+    google = research.get("google") or {}
+    local = research.get("local") or {}
+    phone = lead.get("phone") or ((local.get("phones") or [None])[0] if isinstance(local.get("phones"), list) else None)
+    email = lead.get("email") or ((local.get("emails") or [None])[0] if isinstance(local.get("emails"), list) else None)
+    score = int(lead.get("score", 0) or 0)
+    problems = lead.get("problems") or research.get("problems") or []
+    services = lead.get("recommended_services") or []
+    breakdown = research.get("score_breakdown") or []
+    lines = [
+        "📤 <b>LEADHUNTER · LEAD HANDOFF</b>",
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"🏢 <b>{html.escape(str(lead.get('name') or 'Unnamed Business'))}</b>",
+        f"📍 {html.escape(str(lead.get('city') or '—'))} · {html.escape(str(lead.get('industry') or '—'))}",
+        "",
+        f"🎯 <b>Opportunity:</b> {score}/100",
+        f"🔥 <b>Priority:</b> {html.escape(str(lead.get('priority') or '—'))}",
+        f"🧭 <b>Status:</b> {html.escape(str(lead.get('status') or 'NEW'))}",
+        "",
+        f"🌐 <b>Website:</b> {html.escape(str(lead.get('website') or 'Not found'))}",
+        f"📞 <b>Phone:</b> {html.escape(str(phone or 'Not found'))}",
+        f"✉️ <b>Email:</b> {html.escape(str(email or 'Not found'))}",
+        f"📍 <b>Google local:</b> #{html.escape(str(google.get('local_rank'))) if google.get('local_rank') else 'Not measured'}",
+        f"⭐ <b>Rating:</b> {html.escape(str(google.get('rating') or 'Not found'))} · 💬 {html.escape(str(google.get('review_count') or '0'))} reviews",
+        "",
+        "⚠️ <b>PROBLEMS / OPPORTUNITY</b>",
+    ]
+    lines += [f"• {html.escape(str(x))}" for x in problems[:8]] or ["• No major problem recorded."]
+    lines += ["", "🛠️ <b>RECOMMENDED SERVICES</b>"]
+    lines += [f"• {html.escape(str(x))}" for x in services[:8]] or ["• Audit first"]
+    if breakdown:
+        lines += ["", "💡 <b>WHY THIS LEAD</b>"]
+        lines += [f"• {html.escape(str(k))}: <b>+{html.escape(str(v))}</b>" for k, v in breakdown if v]
+    maps_url = google.get("maps_url") or lead.get("google_maps_url")
+    website = lead.get("website")
+    if maps_url or website:
+        lines += ["", "🔗 <b>LINKS</b>"]
+        if maps_url and str(maps_url).startswith("http"):
+            lines.append(f'<a href="{html.escape(str(maps_url), quote=True)}">📍 Google Maps</a>')
+        if website and str(website).startswith("http"):
+            lines.append(f'<a href="{html.escape(str(website), quote=True)}">🌐 Website</a>')
+    bot_app = getattr(getattr(request.app, "state", None), "bot", None)
+    if not bot_app or not getattr(bot_app, "bot", None):
+        raise HTTPException(503, "Telegram bot is not ready")
+    try:
+        await bot_app.bot.send_message(chat_id=int(admin), text="\n".join(lines), parse_mode="HTML", disable_web_page_preview=True)
+    except Exception as exc:
+        raise HTTPException(502, f"Telegram send failed: {str(exc)[:300]}")
+    await db.record_activity(business_id, "TELEGRAM_SENT", "dashboard", "Lead details sent to Telegram")
+    return {"ok": True, "business_id": business_id}
+
+
+PAGE = r'''<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#f6f7fb"><meta name="color-scheme" content="light dark">
+<title>LeadHunter · Lead Intelligence</title>
+<style>
+:root{--bg:#f6f7fb;--surface:#fff;--surface2:#f1f3f8;--text:#151821;--muted:#737b8c;--line:#e1e5ee;--accent:#655cf6;--accent2:#16a6b6;--good:#16845b;--warn:#a66a00;--bad:#c43c52;--shadow:0 12px 35px rgba(25,30,50,.07);--r:18px}*{box-sizing:border-box}html,body{margin:0;min-height:100%;background:var(--bg);color:var(--text);font:14px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}button,input,select{font:inherit}button{cursor:pointer}a{color:inherit}.shell{max-width:1380px;margin:auto;padding:18px 22px 42px}.topbar{height:62px;display:flex;align-items:center;justify-content:space-between;gap:16px}.brand{display:flex;align-items:center;gap:11px}.logo{width:43px;height:43px;border-radius:14px;display:grid;place-items:center;background:#e9e7ff;font-size:21px}.brand b{display:block;font-size:17px;letter-spacing:-.02em}.brand small{display:block;color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.15em}.desktop-nav{display:flex;gap:4px;padding:5px;background:var(--surface);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow)}.desktop-nav button,.bottom button{border:0;background:transparent;color:var(--muted);font-weight:750;border-radius:10px;padding:9px 11px}.desktop-nav button.active{background:#efeeff;color:var(--accent)}.version{font-size:10px;color:var(--muted)}.view{display:none}.view.active{display:block}.herohead{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin:45px 0 22px}.eyebrow{font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--accent);font-weight:850}.herohead h1{font-size:clamp(36px,5.5vw,58px);line-height:.96;letter-spacing:-.06em;margin:7px 0 10px}.herohead p{margin:0;color:var(--muted);font-size:15px;max-width:720px}.metrics{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}.metric,.panel,.lead,.theme{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow)}.metric{padding:15px;min-height:104px}.metric small{display:block;color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.12em;font-weight:850}.metric strong{display:block;font-size:29px;line-height:1.1;margin-top:8px}.metric span{font-size:11px;color:var(--muted)}.panel{padding:16px;margin-top:13px}.panelhead{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:12px}.panelhead h2{margin:0;font-size:17px;letter-spacing:-.02em}.panelhead p{margin:3px 0 0;color:var(--muted);font-size:12px}.searches{display:grid;gap:7px}.searchrow{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 13px;border:1px solid var(--line);border-radius:13px;background:var(--surface2);cursor:pointer}.searchrow:hover{border-color:#c9c5ff}.searchrow b{font-size:13px}.searchrow small{display:block;color:var(--muted);font-size:10px;margin-top:2px}.searchcount{text-align:right;font-weight:900}.searchcount small{font-weight:500}.leadlist{display:grid;gap:8px}.lead{overflow:hidden;box-shadow:none}.lead.open{box-shadow:var(--shadow)}.summary{display:grid;grid-template-columns:minmax(0,1fr) 70px auto 20px;align-items:center;gap:10px;padding:13px;min-height:68px;cursor:pointer}.summary:hover{background:#fafbfe}.name{font-weight:850;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.subline{color:var(--muted);font-size:11px;margin-top:2px}.score{font-weight:950;text-align:center}.priority{font-size:9px;font-weight:850;padding:5px 8px;border-radius:99px;background:var(--surface2);color:var(--muted)}.priority.hot{background:#fff0f3;color:var(--bad)}.priority.high{background:#fff7e8;color:var(--warn)}.details{border-top:1px solid var(--line);padding:14px}.leadhero{padding:15px;border-radius:14px;background:linear-gradient(135deg,#f4f2ff,#eefafa);border:1px solid #dedcff}.leadhero h2{margin:0;font-size:22px;letter-spacing:-.03em}.badges,.chips,.actions,.links{display:flex;flex-wrap:wrap;gap:6px}.badges{margin-top:8px}.badge,.chip,.service,.link{font-size:10px;padding:6px 8px;border-radius:9px}.badge{background:var(--surface);border:1px solid var(--line);color:var(--muted)}.signals{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-top:9px}.signal{border:1px solid var(--line);border-radius:12px;padding:10px}.signal b{display:block;color:var(--muted);font-size:8px;text-transform:uppercase;letter-spacing:.1em}.signal strong{display:block;margin-top:4px;font-size:13px;overflow-wrap:anywhere}.signal.good{border-color:#b9e6d2}.signal.warn{border-color:#efd39a}.detailgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.block{border:1px solid var(--line);border-radius:13px;padding:12px;margin-top:8px}.block h3{margin:0 0 8px;font-size:9px;text-transform:uppercase;letter-spacing:.14em}.chip{background:#fff1f4;color:#71303b}.service{background:#eaf8f2;color:#08734b}.facts{display:grid;grid-template-columns:100px 1fr;gap:6px;font-size:11px}.facts b{color:var(--muted)}.facts span{overflow-wrap:anywhere}.link{background:var(--surface2);text-decoration:none;border:1px solid var(--line)}.pitch{background:#fff8e9;border-color:#efd79d}.pitch p{margin:0;font-size:11px;white-space:pre-wrap}.btn{border:1px solid var(--line);background:var(--surface);color:var(--text);border-radius:11px;min-height:42px;padding:9px 13px;font-weight:800}.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}.btn:disabled{opacity:.55;cursor:not-allowed}.findgrid{display:grid;grid-template-columns:1fr 1fr 160px;gap:10px}.field label{display:block;color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.12em;font-weight:850;margin-bottom:5px}.field select{width:100%;min-height:44px;border:1px solid var(--line);border-radius:11px;background:var(--surface);color:var(--text);padding:8px 10px}.statusbox{margin-top:10px}.analyticsgrid,.settingsgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.rank{display:flex;justify-content:space-between;gap:12px;padding:8px 10px;background:var(--surface2);border-radius:9px;margin-top:5px;font-size:11px}.empty{padding:25px;text-align:center;color:var(--muted);border:1px dashed var(--line);border-radius:13px;background:var(--surface2)}.theme{padding:16px;cursor:pointer;box-shadow:none}.theme.active{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent);background:#f3f2ff}.theme b{display:block}.theme span{font-size:11px;color:var(--muted)}.bottom{display:none}.toast{position:fixed;right:18px;bottom:18px;background:#171a24;color:#fff;border-radius:12px;padding:10px 13px;opacity:0;transform:translateY(8px);transition:.2s;z-index:80;font-size:11px;pointer-events:none}.toast.show{opacity:1;transform:none}body.dark{--bg:#0b1017;--surface:#121923;--surface2:#18212c;--text:#f3f6fa;--muted:#9aa7b6;--line:#283443;--accent:#8b80ff;--accent2:#2ad3dc;--good:#3cdaa0;--warn:#ffd166;--bad:#ff7485}body.dark .leadhero{background:linear-gradient(135deg,#1d1a35,#10272a)}body.dark .theme.active{background:#1b1a32}body.neo{--bg:#eeeae2;--surface:#fffdf8;--surface2:#e6e0d6;--line:#24282d;--shadow:5px 6px 0 #24282d22}body.dark.neo{--bg:#090c11;--surface:#121720;--surface2:#1b232d;--line:#e4e9ef;--accent:#ffd34f;--shadow:5px 6px 0 #000}.skeleton{height:11px;background:var(--surface2);border-radius:6px;animation:pulse 1.2s infinite alternate}@keyframes pulse{to{opacity:.45}}@media(max-width:900px){.shell{padding:10px 10px 92px}.topbar{height:52px}.desktop-nav{display:none}.version{display:none}.brand small{display:none}.logo{width:40px;height:40px}.herohead{margin:28px 0 17px}.herohead h1{font-size:36px}.herohead p{font-size:13px}.metrics{grid-template-columns:1fr 1fr;gap:7px}.metric{padding:11px;min-height:91px}.metric strong{font-size:23px}.metric:last-child{grid-column:span 2}.panel{padding:12px;margin-top:9px}.signals{grid-template-columns:1fr 1fr}.detailgrid,.analyticsgrid,.settingsgrid,.findgrid{grid-template-columns:1fr}.summary{grid-template-columns:minmax(0,1fr) 52px 18px;gap:7px}.summary .priority{display:none}.summary{padding:12px}.details{padding:9px}.facts{grid-template-columns:82px 1fr}.actions .btn{flex:1 1 145px}.bottom{position:fixed;display:grid;grid-template-columns:repeat(5,1fr);left:6px;right:6px;bottom:6px;z-index:60;padding:5px;background:color-mix(in srgb,var(--surface) 94%,transparent);backdrop-filter:blur(18px);border:1px solid var(--line);border-radius:16px;box-shadow:0 12px 35px rgba(0,0,0,.12)}.bottom button{min-height:49px;padding:4px 2px;font-size:9px}.bottom button span{display:block;font-size:16px;line-height:18px}.searchrow{padding:11px}.searchcount{font-size:14px}}@media(max-width:420px){.shell{padding-left:8px;padding-right:8px}.herohead h1{font-size:34px}.panelhead p{font-size:11px}.btn{min-height:44px}.leadhero h2{font-size:19px}}
+</style></head>
+<body><div class="shell"><header class="topbar"><div class="brand"><div class="logo">🎯</div><div><b>LeadHunter</b><small>Lead intelligence workspace</small></div></div><nav class="desktop-nav" id="desktop-nav"></nav><span class="version">v3.8.0</span></header>
+<main>
+<section class="view active" id="leads"><div class="herohead"><div><div class="eyebrow">Workspace</div><h1>Your leads.</h1><p>Saved opportunities, previous searches and your next best prospects — without starting a new search every time.</p></div><button class="btn primary" data-go="find">🔎 Find new leads</button></div>
+<div class="metrics"><div class="metric"><small>Total</small><strong id="m-total">—</strong><span>Saved businesses</span></div><div class="metric"><small>Hot</small><strong id="m-hot">—</strong><span>Highest priority</span></div><div class="metric"><small>Qualified</small><strong id="m-qualified">—</strong><span>Ready to pitch</span></div><div class="metric"><small>Contacted</small><strong id="m-contacted">—</strong><span>Outreach started</span></div><div class="metric"><small>Won</small><strong id="m-won">—</strong><span>Closed deals</span></div></div>
+<section class="panel"><div class="panelhead"><div><h2>Saved searches</h2><p>Your discovery history. Open one to see the leads it produced.</p></div></div><div id="searches" class="searches"><div class="empty">Loading saved searches…</div></div></section>
+<section class="panel"><div class="panelhead"><div><h2>Lead pipeline</h2><p>Open a lead for verified research, Google context, opportunity reasons and actions.</p></div></div><div id="lead-list" class="leadlist"><div class="empty">Loading your leads…</div></div></section></section>
+<section class="view" id="find"><div class="herohead"><div><div class="eyebrow">Discovery</div><h1>Find new leads.</h1><p>Choose a business type and Madhya Pradesh city. Results are saved automatically.</p></div></div><section class="panel"><div class="findgrid"><div class="field"><label>Business type</label><select id="find-type"></select></div><div class="field"><label>City</label><select id="find-city"></select></div><div class="field"><label>Lead count</label><select id="find-limit"><option>10</option><option selected>20</option><option>30</option><option>50</option></select></div></div><div class="actions" style="margin-top:10px"><button class="btn primary" id="find-btn">🔎 Start discovery</button></div><div id="find-status" class="statusbox"></div></section></section>
+<section class="view" id="analytics"><div class="herohead"><div><div class="eyebrow">Sales intelligence</div><h1>Know where to focus.</h1><p>Understand your pipeline, strongest markets and the services your leads need.</p></div></div><div class="analyticsgrid"><section class="panel"><div class="panelhead"><div><h2>Pipeline</h2><p>Current conversion picture.</p></div></div><div id="a-total"><div class="empty">Loading…</div></div></section><section class="panel"><div class="panelhead"><div><h2>Best cities</h2><p>Where your lead volume is concentrated.</p></div></div><div id="a-cities"><div class="empty">Loading…</div></div></section><section class="panel"><div class="panelhead"><div><h2>Business types</h2><p>Which markets you are finding most.</p></div></div><div id="a-industries"><div class="empty">Loading…</div></div></section><section class="panel"><div class="panelhead"><div><h2>Recommended services</h2><p>Common sales opportunities.</p></div></div><div id="a-services"><div class="empty">Loading…</div></div></section></div></section>
+<section class="view" id="outreach"><div class="herohead"><div><div class="eyebrow">Next action</div><h1>Who should you contact?</h1><p>High-priority leads that have not moved into outreach yet.</p></div></div><section class="panel"><div id="outreach-list"><div class="empty">Loading outreach queue…</div></div></section></section>
+<section class="view" id="settings"><div class="herohead"><div><div class="eyebrow">Preferences</div><h1>Make it yours.</h1><p>Choose a visual system. Your choice stays on this device.</p></div></div><div class="settingsgrid"><div class="theme" data-theme="light"><b>☀️ Light Modern</b><span>Clean SaaS workspace, soft surfaces and quiet borders.</span></div><div class="theme" data-theme="dark"><b>🌙 Dark Modern</b><span>Graphite surfaces with subtle purple/cyan accents.</span></div><div class="theme" data-theme="neo"><b>✦ Light Neo</b><span>Stronger borders and tactile controls.</span></div><div class="theme" data-theme="darkneo"><b>⚡ Dark Neo</b><span>High contrast with heavier tactile styling.</span></div></div></section>
+</main></div><nav class="bottom" id="bottom"></nav><div class="toast" id="toast"></div>
+<script>
+(function(){
+const NAV=[['leads','📋','Leads'],['find','🔎','Find'],['analytics','📊','Analytics'],['outreach','✉️','Outreach'],['settings','⚙️','Settings']];
+const TYPES=__TYPES__;
+const CITIES=__CITIES__;
+const STAGES=__STAGES__;
+const state={page:'leads',leads:[],searchLeads:null};
+const $=s=>document.querySelector(s), esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function toast(v){const t=$('#toast');t.textContent=v;t.classList.add('show');clearTimeout(window.__toast);window.__toast=setTimeout(()=>t.classList.remove('show'),2600)}
+async function api(url,opt={}){const r=await fetch(url,{credentials:'same-origin',...opt,headers:{Accept:'application/json',...(opt.headers||{})}});let j={};try{j=await r.json()}catch{}if(!r.ok)throw Error(j.detail||'Request failed ('+r.status+')');return j}
+function pageFromHash(){const p=location.hash.replace('#','');return NAV.some(x=>x[0]===p)?p:'leads'}
+function nav(){const p=state.page;$('#desktop-nav').innerHTML=NAV.map(x=>`<button class="${p===x[0]?'active':''}" data-page="${x[0]}">${x[1]} ${x[2]}</button>`).join('');$('#bottom').innerHTML=NAV.map(x=>`<button class="${p===x[0]?'active':''}" data-page="${x[0]}"><span>${x[1]}</span>${x[2]}</button>`).join('');document.querySelectorAll('[data-page]').forEach(b=>b.onclick=()=>go(b.dataset.page))}
+function go(p){state.page=NAV.some(x=>x[0]===p)?p:'leads';history.replaceState(null,'','#'+state.page);document.querySelectorAll('.view').forEach(v=>v.classList.toggle('active',v.id===state.page));nav();window.scrollTo(0,0);if(state.page==='analytics')loadAnalytics();if(state.page==='outreach')loadOutreach()}
+function renderMetrics(){const a=state.leads;$('#m-total').textContent=a.length;$('#m-hot').textContent=a.filter(x=>x.priority==='HOT').length;$('#m-qualified').textContent=a.filter(x=>['RESEARCHED','QUALIFIED','CONTACTED','RESPONDED','MEETING','PROPOSAL','NEGOTIATION','WON'].includes(x.status)).length;$('#m-contacted').textContent=a.filter(x=>['CONTACTED','RESPONDED','MEETING','PROPOSAL','NEGOTIATION','WON'].includes(x.status)).length;$('#m-won').textContent=a.filter(x=>x.status==='WON').length}
+function leadCard(l){const r=l.research||{},g=r.google||{},w=r.website||{},local=r.local||{};const problems=(r.problems||l.problems||[]).slice(0,5).map(x=>`<span class="chip">${esc(typeof x==='string'?x:x.problem||x.title||JSON.stringify(x))}</span>`).join('');const services=(l.recommended_services||[]).slice(0,6).map(x=>`<span class="service">${esc(x)}</span>`).join('');const rank=g.local_rank?'#'+esc(g.local_rank):'Not measured';return `<article class="lead"><div class="summary" data-open="${l.id}"><div><div class="name">${esc(l.name||'Unnamed business')}</div><div class="subline">${esc(l.industry||'Business')} · ${esc(l.city||'')}</div></div><div class="score">${esc(l.score??'—')}</div><span class="priority ${String(l.priority||'').toLowerCase()}">${esc(l.priority||'LOW')}</span><span>›</span></div><div class="details" id="detail-${l.id}" hidden><div class="leadhero"><h2>${esc(l.name||'Unnamed business')}</h2><div class="badges"><span class="badge">🎯 ${esc(l.score??'—')}/100</span><span class="badge">🔥 ${esc(l.priority||'LOW')}</span><span class="badge">🧭 ${esc(l.status||'NEW')}</span></div><div class="signals"><div class="signal ${g.local_rank?'good':'warn'}"><b>Google local</b><strong>${rank}</strong></div><div class="signal ${w.exists?'good':'warn'}"><b>Website</b><strong>${w.exists?'Verified':'Missing'}</strong></div><div class="signal ${local.phone_found?'good':'warn'}"><b>Phone</b><strong>${local.phone_found?'Available':'Missing'}</strong></div><div class="signal ${local.email_found?'good':'warn'}"><b>Email</b><strong>${local.email_found?'Available':'Missing'}</strong></div></div></div><div class="detailgrid"><div class="block"><h3>Why this is an opportunity</h3><div class="chips">${problems||'<span class="badge">No major problem recorded.</span>'}</div></div><div class="block"><h3>Recommended services</h3><div class="badges">${services||'<span class="badge">Audit first</span>'}</div></div></div><div class="block"><h3>Verified contact & local data</h3><div class="facts"><b>Phone</b><span>${esc(l.phone||local.phones?.[0]||'Not available')}</span><b>Email</b><span>${esc(l.email||local.emails?.[0]||'Not available')}</span><b>Rating</b><span>${g.rating?esc(g.rating)+' / 5':'Not available'}${g.review_count?' · '+esc(g.review_count)+' reviews':''}</span><b>Website</b><span>${w.url?`<a href="${esc(w.url)}" target="_blank" rel="noopener">Open website ↗</a>`:(l.website?`<a href="${esc(l.website)}" target="_blank" rel="noopener">Open website ↗</a>`:'Not available')}</span><b>Search</b><span>${esc((r.search||{}).query||'—')}</span></div></div><div class="actions" style="margin-top:9px"><button class="btn primary" data-telegram="${l.id}">📨 Send to Telegram</button><button class="btn" data-pitch="${l.id}">✍️ Generate pitch</button><select class="fieldselect btn" data-status="${l.id}">${STAGES.map(s=>`<option ${s===l.status?'selected':''}>${s}</option>`).join('')}</select></div><div class="pitch block" id="pitch-${l.id}" hidden><h3>Recommended pitch</h3><p></p></div></div></article>`}
+function bindLeads(root=document){root.querySelectorAll('[data-open]').forEach(x=>x.onclick=()=>{const d=$('#detail-'+x.dataset.open);const open=d.hidden;d.hidden=!open;x.closest('.lead').classList.toggle('open',open)});root.querySelectorAll('[data-telegram]').forEach(b=>b.onclick=async e=>{e.stopPropagation();b.disabled=true;try{await api('/dashboard/api/leads/'+b.dataset.telegram+'/telegram',{method:'POST'});toast('✅ Lead sent to Telegram')}catch(x){toast('⚠️ '+x.message)}finally{b.disabled=false}});root.querySelectorAll('[data-pitch]').forEach(b=>b.onclick=async e=>{e.stopPropagation();const box=$('#pitch-'+b.dataset.pitch);try{const j=await api('/dashboard/api/leads/'+b.dataset.pitch+'/message',{method:'POST'});box.querySelector('p').textContent=j.message||'No message returned';box.hidden=false}catch(x){toast('⚠️ '+x.message)}});root.querySelectorAll('[data-status]').forEach(s=>s.onchange=async()=>{try{await api('/dashboard/api/leads/'+s.dataset.status+'/status',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:s.value})});const l=state.leads.find(x=>String(x.id)===String(s.dataset.status));if(l)l.status=s.value;renderMetrics();toast('✅ Status updated')}catch(x){toast('⚠️ '+x.message)}})}
+function renderLeads(){const list=$('#lead-list');list.innerHTML=state.leads.length?state.leads.map(leadCard).join(''):'<div class="empty">📭 No leads yet. Use Find to discover your first businesses.</div>';renderMetrics();bindLeads(list)}
+async function loadLeads(){try{const j=await api('/dashboard/api/leads?limit=100');state.leads=j.leads||[];renderLeads()}catch(e){$('#lead-list').innerHTML='<div class="empty">⚠️ '+esc(e.message)+'</div>'}}
+async function loadSearches(){try{const j=await api('/dashboard/api/searches?limit=30');const a=j.searches||[];$('#searches').innerHTML=a.length?a.map(s=>`<div class="searchrow" data-search="${s.id}"><div><b>${esc(s.industry||'Business')} · ${esc(s.city||'')}</b><small>${esc(s.status||'')} · ${esc(s.created_at||'')}</small></div><div class="searchcount">${esc(s.result_count??s.succeeded??0)}<small>results</small></div></div>`).join(''):'<div class="empty">🗂️ No saved searches yet. Use Find to create one.</div>';document.querySelectorAll('[data-search]').forEach(x=>x.onclick=async()=>{try{const j=await api('/dashboard/api/searches/'+x.dataset.search+'/leads?limit=100');state.leads=j.leads||[];renderLeads();go('leads');toast('📂 Opened saved search')}catch(e){toast('⚠️ '+e.message)}})}catch(e){$('#searches').innerHTML='<div class="empty">⚠️ '+esc(e.message)+'</div>'}}
+function fillFind(){const t=$('#find-type'),c=$('#find-city');t.innerHTML=TYPES.map(x=>`<option value="${esc(x[1])}">${esc(x[0])}</option>`).join('');c.innerHTML=CITIES.map(x=>`<option>${esc(x)}</option>`).join('');c.value='Jabalpur'}
+async function discover(){const b=$('#find-btn'),s=$('#find-status');b.disabled=true;s.innerHTML='<div class="empty">🔄 Starting discovery…</div>';try{const j=await api('/dashboard/api/discover',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({business_type:$('#find-type').value,city:$('#find-city').value,limit:Number($('#find-limit').value)})});const id=j.job_id;s.innerHTML='<div class="empty">🔎 Discovery started · job #'+esc(id)+'<br>Results are being saved as they arrive.</div>';let tries=0;const poll=async()=>{if(tries++>120)return;try{const q=await api('/dashboard/api/jobs/'+id),job=q.job||{};const done=job.status==='DONE'||job.status==='FAILED';s.innerHTML='<div class="empty">'+(done?(job.status==='DONE'?'✅ Discovery complete · '+esc(job.succeeded||0)+' leads saved.':'⚠️ Discovery failed · '+esc(job.error||'Unknown error')):'🔎 Discovery running · '+esc(job.succeeded||0)+' saved so far…')+'</div>';if(done){await loadLeads();await loadSearches();return}setTimeout(poll,1500)}catch(e){s.innerHTML='<div class="empty">⚠️ '+esc(e.message)+'</div>'}};poll()}catch(e){s.innerHTML='<div class="empty">⚠️ '+esc(e.message)+'</div>'}finally{b.disabled=false}}
+function rankList(items){return (items||[]).map(x=>`<div class="rank"><span>${esc(x.name)}</span><b>${esc(x.count)}</b></div>`).join('')||'<div class="empty">No data yet.</div>'}
+async function loadAnalytics(){try{const j=await api('/dashboard/api/analytics');$('#a-total').innerHTML=`<div class="rank"><span>Total leads</span><b>${esc(j.totals.leads)}</b></div><div class="rank"><span>Qualified</span><b>${esc(j.totals.qualified)}</b></div><div class="rank"><span>Contacted</span><b>${esc(j.totals.contacted)}</b></div><div class="rank"><span>Won</span><b>${esc(j.totals.won)}</b></div><div class="rank"><span>Qualified rate</span><b>${esc(j.conversion.qualified_rate)}%</b></div><div class="rank"><span>Contact rate</span><b>${esc(j.conversion.contact_rate)}%</b></div><div class="rank"><span>Win rate</span><b>${esc(j.conversion.win_rate)}%</b></div>`;$('#a-cities').innerHTML=rankList(j.cities);$('#a-industries').innerHTML=rankList(j.industries);$('#a-services').innerHTML=rankList(j.services)}catch(e){toast('⚠️ '+e.message)}}
+async function loadOutreach(){try{const j=await api('/dashboard/api/outreach?limit=30');const a=j.leads||[];$('#outreach-list').innerHTML=a.length?a.map(leadCard).join(''):'<div class="empty">🎉 No untouched qualified leads right now.</div>';bindLeads($('#outreach-list'))}catch(e){$('#outreach-list').innerHTML='<div class="empty">⚠️ '+esc(e.message)+'</div>'}}
+function theme(){const x=localStorage.lh_theme||'light';document.body.classList.toggle('dark',x==='dark'||x==='darkneo');document.body.classList.toggle('neo',x==='neo'||x==='darkneo');document.querySelectorAll('.theme').forEach(t=>t.classList.toggle('active',t.dataset.theme===x));const meta=document.querySelector('meta[name=theme-color]');if(meta)meta.content=(x==='dark'||x==='darkneo')?'#0b1017':'#f6f7fb')}
+function boot(){state.page=pageFromHash();nav();fillFind();theme();document.querySelectorAll('[data-go]').forEach(b=>b.onclick=()=>go(b.dataset.go));document.querySelectorAll('.theme').forEach(t=>t.onclick=()=>{localStorage.lh_theme=t.dataset.theme;theme()});$('#find-btn').onclick=discover;window.addEventListener('hashchange',()=>go(pageFromHash()));loadLeads();loadSearches()}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
+})();
+</script></body></html>'''
+
+PAGE = PAGE.replace("__TYPES__", json.dumps(BUSINESS_TYPES, ensure_ascii=False)).replace("__CITIES__", json.dumps(CITIES, ensure_ascii=False)).replace("__STAGES__", json.dumps(STAGES, ensure_ascii=False))
