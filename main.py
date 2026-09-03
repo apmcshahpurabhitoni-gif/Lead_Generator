@@ -4,6 +4,7 @@ from fastapi import FastAPI, HTTPException, Request
 from bot import create_application
 from database import Database
 from dashboard import router as dashboard_router
+import dashboard_runtime_fix  # noqa: F401  # patch embedded dashboard before serving it
 
 from config import APP_VERSION, RELEASE_DATE, WHATS_NEW
 
