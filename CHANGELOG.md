@@ -1,26 +1,23 @@
-# LeadHunter 3.3.0 — Wiring & Deployment Fix
-
-- Added Render-compatible GET/HEAD health checks.
-- Updated release version to 3.3.0.
-- Added Research Worker and dashboard runtime configuration to `.env.example`.
-- Removed packaged Python bytecode artifacts.
-- Preserved the canonical Telegram, dashboard, discovery, research, scoring and Supabase workflow.
-
 # Changelog
 
-## v3.3.0 — 2026-09-06
-
+## v4.0.0 — 2026-09-07
 ### Dashboard
-- Consolidated the production dashboard into `dashboard.py`.
-- Removed the temporary runtime page override architecture.
-- Kept lead cards, discovery, analytics, outreach and settings in one workspace.
-- All dashboard data is loaded from canonical API endpoints.
+- Added the Dashboard 4.0 route at `/dashboard`.
+- Kept compact expandable lead cards, four themes and responsive navigation.
+- Removed fake overview and analytics placeholder responses.
 
 ### Wiring
-- Dashboard and Telegram share canonical persisted lead state.
-- Dashboard URL is configurable with `DASHBOARD_URL`.
-- Research Worker configuration is documented in `.env.example`.
+- Dashboard now uses the canonical `Database` instance from FastAPI application state.
+- Discovery creates persisted DISCOVERY jobs and runs the canonical workflow.
+- Dataset results come from authoritative `search_results` relationships.
+- Research loads the real lead before calling the Research Worker.
+- Research results are scored and persisted through the canonical database layer.
+- Pitch generation now reports explicit `501 Not Implemented` until a real backend exists.
 
-### Validation
-- Python compilation checked.
-- Existing repository tests retained and executed.
+### Integrity
+- Version synchronized to 4.0.0.
+- Dashboard exposes a router compatible with `main.py`.
+- Dashboard JavaScript test target updated to the template source.
+
+## v3.3.0 — 2026-09-06
+- Previous wiring and deployment release.
