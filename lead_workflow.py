@@ -5,7 +5,7 @@ from typing import Any
 
 from database import Database
 from discovery import discover_businesses
-from research import research_business
+from research_client import research_business
 from scoring import score_lead
 
 log = logging.getLogger(__name__)

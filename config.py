@@ -1,27 +1,14 @@
 import os
 
-APP_VERSION = "3.2.0"
+APP_VERSION = "3.3.0"
 RELEASE_DATE = "2026-09-06"
 WHATS_NEW = [
-    "🔗 Unified Telegram + Dashboard lead workflow",
-    "🗄️ Dashboard and Telegram use the same persisted lead state",
-    "📊 Canonical discovery jobs, search results, pipeline statuses and analytics",
-    "🔄 Consistent lead status/activity updates across both interfaces",
-    "🛡️ Stronger API validation and safer user-facing error handling",
-    "🧭 Fixed dashboard search/result and lead-detail data flow",
-    "🧪 Wiring-focused validation and production dashboard consolidation",
-    "🧩 Removed runtime dashboard override; one dashboard source is served",
-    "⚙️ Dashboard URL is now environment-configurable",
-    "🔬 Research Worker integration configuration added",
-    "❤️ Health endpoints support Render GET and HEAD checks",
+    "🔗 LeadHunter now uses the deployed Research Worker for research",
+    "🩺 Unified health and system dependency status checks",
+    "📊 Clean database-to-dashboard search result wiring",
+    "🧹 Consolidated database migration path and runtime hardening",
+    "🛡️ Clear production configuration validation and failure messages",
 ]
 
-# Runtime configuration is supplied through environment variables.
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-ADMIN_TELEGRAM_ID = os.getenv("ADMIN_TELEGRAM_ID", "").strip()
-SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "").strip()
-WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL", "").strip()
-TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
-DASHBOARD_USER = os.getenv("DASHBOARD_USER", "").strip()
-DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "").strip()
+def version_label() -> str:
+    return f"v{APP_VERSION}"

@@ -1,14 +1,14 @@
-# LeadHunter 3.2.0 — Wiring & Deployment Fix
+# LeadHunter 3.3.0 — Wiring & Deployment Fix
 
 - Added Render-compatible GET/HEAD health checks.
-- Updated release version to 3.2.0.
+- Updated release version to 3.3.0.
 - Added Research Worker and dashboard runtime configuration to `.env.example`.
 - Removed packaged Python bytecode artifacts.
 - Preserved the canonical Telegram, dashboard, discovery, research, scoring and Supabase workflow.
 
 # Changelog
 
-## v3.1.0 — 2026-09-06
+## v3.3.0 — 2026-09-06
 
 ### Dashboard
 - Consolidated the production dashboard into `dashboard.py`.
