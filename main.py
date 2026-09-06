@@ -1,6 +1,6 @@
 import logging, os, secrets
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from bot import create_application
 from database import Database
 from dashboard import router as dashboard_router
@@ -96,6 +96,21 @@ async def lifespan(application: FastAPI):
 
 app = FastAPI(title="LeadHunter", version=APP_VERSION, lifespan=lifespan)
 app.include_router(dashboard_router)
+
+
+@app.get("/")
+async def root_health():
+    return {"ok": True, "service": "leadhunter", "version": APP_VERSION, "status": "healthy"}
+
+
+@app.head("/")
+async def root_health_head():
+    return Response(status_code=200)
+
+
+@app.get("/health")
+async def health():
+    return {"ok": True, "service": "leadhunter", "version": APP_VERSION, "status": "healthy"}
 
 
 @app.post("/telegram/webhook")
