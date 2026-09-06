@@ -1,69 +1,189 @@
-# LeadHunter v3.3.0
+# LeadHunter
 
-LeadHunter is a production-oriented Telegram + FastAPI lead-intelligence workspace. Telegram and the dashboard share one canonical Supabase-backed state for leads, research, discovery jobs, search results, activities, follow-ups and deals.
+> Local Business Discovery & Intelligence Platform
 
-## Architecture
+**Dashboard Version:** 4.0.0  
+**Project Status:** Active Development
 
-```text
-Telegram ─┐
-          ├──> Canonical Lead Workflow
-Dashboard ┘          │
-                     ▼
-          Discovery → Research → Scoring → Persistence
-                     │
-          ┌──────────┴──────────┐
-          ▼                     ▼
-       Telegram              Dashboard
-```
+LeadHunter helps discover local businesses, organize them into reusable business datasets, research individual leads, identify opportunities, and prepare leads for outreach.
 
-## Dashboard
+## ✨ Dashboard 4.0
 
-One production dashboard source is served from `dashboard.py`.
+The dashboard has been rebuilt around the current LeadHunter workflow:
 
-- Lead overview and pipeline metrics
-- Saved searches and result sets
-- Live discovery jobs
-- Collapsible lead intelligence cards
-- Lead scoring evidence and recommended services
-- Analytics and opportunity concentration
-- Outreach queue
-- Pitch generation
-- Telegram lead handoff
-- Pipeline status updates
-- Light, dark and Neo workspace themes
+- 🏠 **Overview** — system metrics and recent activity
+- 🔍 **Find Leads** — discover businesses by category and city
+- ◈ **Explore** — browse reusable business datasets and leads
+- 📊 **Analytics** — lead, research and opportunity coverage
+- 📤 **Outreach** — manage leads through outreach stages
+- 🎨 **4 Themes** — Modern Light, Modern Dark, Neo Light and Neo Dark
+- ⚙️ **Settings** — accessible from the top-right
+- 📱 **Mobile Navigation** — optimized bottom navigation
 
-## Required environment
+## 🏢 Lead Datasets
+
+LeadHunter treats local searches as reusable business datasets.
+
+For example:
 
 ```text
-TELEGRAM_BOT_TOKEN
-ADMIN_TELEGRAM_ID
-WEBHOOK_BASE_URL
-SUPABASE_URL
-SUPABASE_KEY
-DASHBOARD_USER
-DASHBOARD_PASSWORD
+🦷 Dentist · Jabalpur
+92 businesses
 ```
 
-Optional integrations are documented in `.env.example`, including Google Maps and the deployed Research Worker.
+Refreshing the same category and location should update the dataset rather than create unnecessary duplicate search history.
 
-## Validation
+## 🔎 Lead Intelligence
+
+Lead cards are compact by default and expandable when more detail is needed.
+
+Available intelligence can include:
+
+### Contact
+- 📞 Phone
+- ✉️ Email
+- 🌐 Website
+- 📍 Address
+
+### Google Intelligence
+- ⭐ Rating
+- 💬 Review count
+- 🗺️ Maps/profile information
+- 🔍 Visibility information
+
+### Review Intelligence
+- 😊 Sentiment
+- 💬 Owner response rate
+- ⚠️ Main complaints
+- 👍 Positive topics
+
+### Website Intelligence
+- Website availability
+- SEO signals
+- Conversion signals
+- Contact and booking signals
+
+### Opportunities
+- SEO
+- Google Business Profile
+- Website
+- Automation
+- Reputation
+- Visibility
+
+## 🔌 Architecture
+
+```text
+LeadHunter Main App / Bot / Dashboard
+                │
+                ▼
+          Research Client
+                │
+                ▼
+          Research Worker
+        ┌───────┴────────┐
+        ▼                ▼
+     SearXNG       Intelligence Modules
+                     ├── Website Analysis
+                     ├── Maps Adapter
+                     └── Review Analysis
+```
+
+The dashboard consumes normalized LeadHunter data and does not directly depend on third-party provider schemas.
+
+## 🛡️ Data Rules
+
+LeadHunter must not fabricate:
+
+- Google rankings
+- Maps rankings
+- Review history
+- Owner response rates
+- Competitor information
+- Website findings
+
+When intelligence is unavailable, the UI should clearly display it as unavailable.
+
+## 📁 Dashboard Files
+
+```text
+dashboard.py
+dashboard_ui/
+├── __init__.py
+├── api.py
+└── templates.py
+```
+
+## 🚀 Local Testing
+
+Install project dependencies, then:
 
 ```bash
-pytest -q
-python -m compileall -q .
+uvicorn dashboard:app --reload
 ```
 
-## Release v3.3.0
+Open:
 
-- Added Render-compatible GET/HEAD health checks for reliable deployment health probes.
-- Updated the dashboard and documentation release version to 3.3.0.
-- Consolidated dashboard runtime into one canonical source.
-- Removed temporary dashboard override architecture.
-- Dashboard URL is environment-configurable.
-- Unified dashboard API and persisted lead state.
-- Discovery, search results, analytics, outreach and lead actions use the same backend data.
-- Research Worker integration settings documented.
+```text
+http://127.0.0.1:8000
+```
 
+Check dashboard health:
 
-## v3.3.0 Architecture
-LeadHunter delegates research to the separately deployed Research Worker using `RESEARCH_WORKER_URL`, `WORKER_API_KEY`, and `RESEARCH_WORKER_PATH`. The production flow is Discovery → Research Worker → Scoring → Supabase → Dashboard.
+```text
+/api/health
+```
+
+## ⚠️ Backend Wiring
+
+Dashboard 4.0 is designed to connect to the existing LeadHunter backend modules:
+
+- `database.py`
+- `lead_workflow.py`
+- `discovery.py`
+- `research_client.py`
+
+The dashboard API adapter must use the actual function names and return schemas from the repository.
+
+## 🧪 Before Deployment
+
+Verify:
+
+1. Dashboard loads.
+2. `/api/health` returns successfully.
+3. Find Leads reaches the discovery workflow.
+4. Explore loads real saved leads.
+5. Research reaches the Research Worker.
+6. Missing intelligence is not shown as fake data.
+7. Theme switching works.
+8. Mobile navigation works.
+9. Environment variables are configured.
+10. Version references are synchronized.
+
+## 📚 Documentation
+
+The Local Intelligence architecture is documented separately in:
+
+**LeadHunter Local Intelligence Documentation Pack v1.0.0**
+
+It covers:
+
+- Integration architecture
+- Unified Research API
+- Maps provider adapter
+- Review intelligence
+- Website intelligence
+- Opportunity engine
+- Security and deployment
+- Testing
+- Dashboard wiring
+
+## 🔐 Security
+
+Never commit API keys, passwords, tokens or other secrets to GitHub.
+
+Use environment variables for service configuration and credentials.
+
+---
+
+**LeadHunter 4.0.0 — Local Business Discovery & Intelligence**
