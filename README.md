@@ -1,4 +1,4 @@
-# LeadHunter v3.1.0
+# LeadHunter v3.2.0
 
 LeadHunter is a production-oriented Telegram + FastAPI lead-intelligence workspace. Telegram and the dashboard share one canonical Supabase-backed state for leads, research, discovery jobs, search results, activities, follow-ups and deals.
 
@@ -53,8 +53,10 @@ pytest -q
 python -m compileall -q .
 ```
 
-## Release v3.1.0
+## Release v3.2.0
 
+- Added Render-compatible GET/HEAD health checks for reliable deployment health probes.
+- Updated the dashboard and documentation release version to 3.2.0.
 - Consolidated dashboard runtime into one canonical source.
 - Removed temporary dashboard override architecture.
 - Dashboard URL is environment-configurable.

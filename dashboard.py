@@ -283,7 +283,7 @@ body.neo{--bg:#eeeae2;--s:#fffdf8;--s2:#e7e1d7;--l:#292d31;--sh:5px 6px 0 rgba(3
 </head>
 <body>
 <div class="shell">
-<header class="top"><div class="brand"><div class="logo">🎯</div><div><b>LeadHunter</b><small>Lead intelligence workspace</small></div></div><nav class="nav" id="nav"></nav><span class="version">v3.1.0</span></header>
+<header class="top"><div class="brand"><div class="logo">🎯</div><div><b>LeadHunter</b><small>Lead intelligence workspace</small></div></div><nav class="nav" id="nav"></nav><span class="version">v3.2.0</span></header>
 
 <section class="view active" id="leads">
 <div class="hero"><div><div class="eyebrow">Workspace</div><h1>Your leads.</h1><p>Find, understand and act on the businesses most worth your attention.</p></div><button class="btn primary" onclick="show('find')">🔎 Find new leads</button></div>
