@@ -1,7 +1,7 @@
 import os
 
-APP_VERSION = "3.0.0"
-RELEASE_DATE = "2026-09-03"
+APP_VERSION = "3.1.0"
+RELEASE_DATE = "2026-09-06"
 WHATS_NEW = [
     "🔗 Unified Telegram + Dashboard lead workflow",
     "🗄️ Dashboard and Telegram use the same persisted lead state",
@@ -9,7 +9,9 @@ WHATS_NEW = [
     "🔄 Consistent lead status/activity updates across both interfaces",
     "🛡️ Stronger API validation and safer user-facing error handling",
     "🧭 Fixed dashboard search/result and lead-detail data flow",
-    "🧪 Wiring-focused validation before the dashboard UI rebuild",
+    "🧪 Wiring-focused validation and production dashboard consolidation",
+    "🧩 Removed runtime dashboard override; one dashboard source is served",
+    "⚙️ Dashboard URL is now environment-configurable",
 ]
 
 # Runtime configuration is supplied through environment variables.

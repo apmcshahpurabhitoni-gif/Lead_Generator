@@ -1,37 +1,63 @@
-# LeadHunter
+# LeadHunter v3.1.0
 
-LeadHunter is a Telegram + FastAPI lead-intelligence application. Telegram and the dashboard share one canonical Supabase-backed lead, research, search-job, activity, deal and follow-up state.
+LeadHunter is a production-oriented Telegram + FastAPI lead-intelligence workspace. Telegram and the dashboard share one canonical Supabase-backed state for leads, research, discovery jobs, search results, activities, follow-ups and deals.
 
 ## Architecture
 
-- **FastAPI** — application, webhook and dashboard API
-- **Telegram** — bot interface and lead actions
-- **Supabase** — canonical persisted application state
-- **Discovery → Research → Scoring → Persistence** — canonical lead workflow
-- **Dashboard** — reads and mutates the same persisted state used by Telegram
+```text
+Telegram ─┐
+          ├──> Canonical Lead Workflow
+Dashboard ┘          │
+                     ▼
+          Discovery → Research → Scoring → Persistence
+                     │
+          ┌──────────┴──────────┐
+          ▼                     ▼
+       Telegram              Dashboard
+```
 
-## Runtime
+## Dashboard
 
-The included `Procfile` starts the canonical FastAPI application.
+One production dashboard source is served from `dashboard.py`.
+
+- Lead overview and pipeline metrics
+- Saved searches and result sets
+- Live discovery jobs
+- Collapsible lead intelligence cards
+- Lead scoring evidence and recommended services
+- Analytics and opportunity concentration
+- Outreach queue
+- Pitch generation
+- Telegram lead handoff
+- Pipeline status updates
+- Light, dark and Neo workspace themes
+
+## Required environment
+
+```text
+TELEGRAM_BOT_TOKEN
+ADMIN_TELEGRAM_ID
+WEBHOOK_BASE_URL
+SUPABASE_URL
+SUPABASE_KEY
+DASHBOARD_USER
+DASHBOARD_PASSWORD
+```
+
+Optional integrations are documented in `.env.example`, including Google Maps and the deployed Research Worker.
 
 ## Validation
-
-Run:
 
 ```bash
 pytest -q
 python -m compileall -q .
 ```
 
-## Release
+## Release v3.1.0
 
-Current release: **v3.0.0** — unified Telegram + Dashboard wiring.
-
-### What's new in v3.0.0
-
-- Unified Telegram and dashboard lead workflow.
-- Canonical persisted lead/search/job/pipeline state.
-- Consistent status and activity updates across interfaces.
-- Dashboard discovery and lead-detail APIs use the same workflow/database layer.
-- Stronger validation and safer application-level error handling.
-- Wiring-focused validation before the dashboard UI rebuild.
+- Consolidated dashboard runtime into one canonical source.
+- Removed temporary dashboard override architecture.
+- Dashboard URL is environment-configurable.
+- Unified dashboard API and persisted lead state.
+- Discovery, search results, analytics, outreach and lead actions use the same backend data.
+- Research Worker integration settings documented.

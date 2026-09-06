@@ -4,7 +4,6 @@ from fastapi import FastAPI, HTTPException, Request
 from bot import create_application
 from database import Database
 from dashboard import router as dashboard_router
-import dashboard_runtime_fix  # noqa: F401  # patch embedded dashboard before serving it
 
 from config import APP_VERSION, RELEASE_DATE, WHATS_NEW
 
@@ -58,7 +57,7 @@ async def startup_messages() -> None:
     admin = os.getenv("ADMIN_TELEGRAM_ID", "").strip()
     if not admin:
         return
-    dashboard_url = "https://lead-generator-zzty.onrender.com/dashboard"
+    dashboard_url = os.getenv("DASHBOARD_URL", "").strip() or (required("WEBHOOK_BASE_URL").rstrip("/") + "/dashboard")
     started = (
         "🟢 <b>LEADHUNTER BOT STARTED</b>\n━━━━━━━━━━━━━━━━━━━━\n"
         f"🤖 Status: <b>ONLINE</b>\n📦 Running Version: <b>v{APP_VERSION}</b>\n"
