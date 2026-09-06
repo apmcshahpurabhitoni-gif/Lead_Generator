@@ -1,10 +1,11 @@
-"""LeadHunter Dashboard v4.0.0 — mounted by main.py at /dashboard."""
+"""LeadHunter Dashboard — mounted by main.py at /dashboard."""
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
+from config import APP_VERSION
 from dashboard_ui.api import router as api_router
 from dashboard_ui.templates import DASHBOARD_HTML
 
-__APP_VERSION__ = "4.0.0"
+__APP_VERSION__ = APP_VERSION
 router = APIRouter()
 router.include_router(api_router, prefix="/api")
 
