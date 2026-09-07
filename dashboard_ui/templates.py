@@ -6,12 +6,12 @@ DASHBOARD_HTML=r"""<!doctype html><html><head><meta charset="utf-8"><meta name="
 <section id="explore" class="page"><div id="datasets"></div><div id="leads"></div></section>
 <section id="analytics" class="page"><div class="grid" id="analyticsCards"></div><div class="card" id="analyticsDetails"></div></section>
 <section id="outreach" class="page"><div class="grid" id="outreachCards"></div><div class="card" id="outreachList"></div></section>
-</main></div><div id="settingsPanel" class="settings"><b>⚙️ Settings</b><p class="muted">LeadHunter v4.1.0</p><button onclick="theme()">🎨 Change Theme</button><button onclick="logout()">🚪 Logout</button></div><div id="toast" class="toast"></div><script>
-let csrf=null,currentDataset=null,themes=["","dark","neo-light","neo-dark"],ti=0;
-async function api(url,opt={}){opt.credentials="same-origin";opt.headers={...(opt.headers||{})};if(csrf&&["POST","PUT","PATCH","DELETE"].includes(opt.method))opt.headers["X-CSRF-Token"]=csrf;let r=await fetch("/api"+url,opt);if(r.status===401){location="/login";throw Error("login")}if(!r.ok)throw Error((await r.text()).slice(0,200));return r.json()}
+</main></div><div id="settingsPanel" class="settings"><b>⚙️ Settings</b><p class="muted">LeadHunter v4.1.0</p><button onclick="theme()">🎨 Change Theme</button></div><div id="toast" class="toast"></div><script>
+let currentDataset=null,themes=["","dark","neo-light","neo-dark"],ti=0;
+async function api(url,opt={}){opt.headers={...(opt.headers||{})};let r=await fetch("/api"+url,opt);if(!r.ok)throw Error((await r.text()).slice(0,200));return r.json()}
 function toast(x){let e=document.getElementById("toast");e.textContent=x;e.style.display="block";setTimeout(()=>e.style.display="none",2500)}
 function theme(){ti=(ti+1)%themes.length;document.documentElement.dataset.theme=themes[ti];localStorage.leadhunterTheme=themes[ti]}document.documentElement.dataset.theme=localStorage.leadhunterTheme||"";
-function settings(){document.getElementById("settingsPanel").classList.toggle("show")}async function logout(){await fetch("/auth/logout",{method:"POST",credentials:"same-origin",headers:{"X-CSRF-Token":csrf}});location="/login"}
+function settings(){document.getElementById("settingsPanel").classList.toggle("show")}
 const names={overview:"Overview",find:"Find Leads",explore:"Explore",analytics:"Analytics",outreach:"Outreach"};document.querySelectorAll("[data-p]").forEach(b=>b.onclick=()=>go(b.dataset.p));
 function go(p){document.querySelectorAll(".page").forEach(x=>x.classList.remove("active"));document.getElementById(p).classList.add("active");title.textContent=names[p];document.querySelectorAll("[data-p]").forEach(x=>x.classList.toggle("active",x.dataset.p===p));if(p==="overview")loadOverview();if(p==="explore")loadDatasets();if(p==="analytics")loadAnalytics();if(p==="outreach")loadOutreach()}
 async function loadOverview(){let d=await api("/overview"),m=d.metrics;metrics.innerHTML=[["📁 Datasets",m.datasets],["🔍 Leads",m.leads],["🔬 Researched",m.researched],["🎯 Qualified",m.ready]].map(x=>'<div class="card"><b>'+x[0]+'</b><div class="metric">'+x[1]+'</div></div>').join("");recent.innerHTML=d.recent.length?d.recent.map(datasetHTML).join(""):"<p class=muted>No datasets yet.</p>"}
@@ -28,5 +28,5 @@ async function outreach(id){await api("/outreach/"+id,{method:"POST",headers:{"C
 async function loadAnalytics(){let d=await api("/analytics"),t=d.totals||{};analyticsCards.innerHTML=Object.entries(t).map(([k,v])=>'<div class=card><b>'+esc(k.toUpperCase())+'</b><div class=metric>'+v+'</div></div>').join("");analyticsDetails.innerHTML="<h3>Top Cities</h3>"+(d.cities||[]).map(x=>esc(x.name)+" · "+x.count).join("<br>")+"<h3>Top Industries</h3>"+(d.industries||[]).map(x=>esc(x.name)+" · "+x.count).join("<br>")+"<h3>Top Opportunities</h3>"+(d.services||[]).map(x=>esc(x.name)+" · "+x.count).join("<br>")}
 async function loadOutreach(){let d=await api("/outreach"),c=d.counts||{};outreachCards.innerHTML=["READY","PITCH_GENERATED","CONTACTED","FOLLOW_UP"].map(k=>'<div class=card><b>'+k.replace("_"," ")+'</b><div class=metric>'+(c[k]||0)+'</div></div>').join("");outreachList.innerHTML="<h3>Pipeline</h3>"+(d.items||[]).map(x=>"<p>📤 <b>"+esc(x.business_name)+"</b> · "+esc(x.stage)+"</p>").join("")+(d.followups||[]).map(x=>"<p>⏰ Follow-up: "+esc(x.business_name)+"</p>").join("")}
 function esc(x){let d=document.createElement("div");d.textContent=String(x??"");return d.innerHTML}
-(async()=>{let s=await fetch("/auth/status",{credentials:"same-origin"}).then(x=>x.json());if(!s.authenticated){location="/login";return}csrf=s.csrf_token;loadOverview()})()
+loadOverview()
 </script></body></html>"""
