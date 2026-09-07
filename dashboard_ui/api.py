@@ -3,6 +3,7 @@ from pydantic import BaseModel,Field
 from database import Database
 from lead_workflow import run_discovery_job
 from research_client import research_business
+from research_schema import normalize_research
 from scoring import score_lead
 from ai import generate_whatsapp_message
 from auth import require_dashboard_auth,require_csrf
@@ -37,7 +38,7 @@ async def job(job_id:int,r:Request):
     item=await db(r).get_job(job_id)
     if not item: raise HTTPException(404,"Job not found")
     processed=int(item.get("processed") or 0); succeeded=int(item.get("succeeded") or 0)
-    progress=100 if item.get("status") in {"DONE","FAILED"} else (70 if processed else 20)
+    done=int(item.get("succeeded") or 0)+int(item.get("failed") or 0); progress=100 if item.get("status") in {"DONE","FAILED"} else (min(95,round(done/max(processed,1)*100)) if processed else 5)
     return {"ok":True,"item":item,"progress":progress,"businesses_found":succeeded}
 @router.get("/datasets/{search_id}/leads")
 async def dataset_leads(search_id:int,r:Request,limit:int=100): return {"ok":True,"items":await db(r).list_search_results(search_id,limit=limit)}
@@ -51,7 +52,7 @@ async def research(lead_id:int,r:Request):
     require_csrf(r); d=db(r); lead=await d.get_lead(lead_id)
     if not lead: raise HTTPException(404,"Lead not found")
     try:
-        result=await research_business(lead); score=score_lead(result); result["score_breakdown"]=score.get("breakdown",[])
+        raw=await research_business(lead); result=normalize_research(lead,raw); score=score_lead(result); result["score_breakdown"]=score.get("breakdown",[])
         await d.save_research_and_score(lead_id,result,score); return {"ok":True,"research":result,"score":score}
     except Exception as e: raise HTTPException(502,f"Research failed: {type(e).__name__}: {str(e)[:300]}")
 @router.post("/leads/{lead_id}/pitch")
