@@ -1,112 +1,38 @@
-"""Authenticated client for the separate LeadHunter Research Worker v0.5.x."""
+"""Authenticated LeadHunter Research Worker client."""
 from __future__ import annotations
-
 import os
 from typing import Any
-
 import httpx
-
-
-class ResearchWorkerError(RuntimeError):
-    """Raised when the Research Worker cannot complete a request."""
-
-
-def _base() -> str:
-    value = os.getenv("RESEARCH_WORKER_URL", "").strip().rstrip("/")
-    if not value:
-        raise ResearchWorkerError("RESEARCH_WORKER_URL is required")
-    return value
-
-
-def _headers() -> dict[str, str]:
-    key = os.getenv("WORKER_API_KEY", "").strip()
-    if not key:
-        raise ResearchWorkerError("WORKER_API_KEY is required")
-    return {"X-API-Key": key}
-
-
-def _timeout() -> float:
-    raw = os.getenv("RESEARCH_WORKER_TIMEOUT", "90").strip()
-    try:
-        value = float(raw)
-    except ValueError as exc:
-        raise ResearchWorkerError("RESEARCH_WORKER_TIMEOUT must be a number") from exc
-    return max(5.0, min(value, 300.0))
-
-
-async def research_business(business: dict[str, Any]) -> dict[str, Any]:
-    """Run SERP research through the deployed worker's /serp contract.
-
-    The worker v0.5.1 API accepts a compact SERP request rather than a full
-    business object. Normalize the main LeadHunter business into that contract.
-    """
-    base = _base()
-    path = os.getenv("RESEARCH_WORKER_PATH", "/serp").strip() or "/serp"
-    if not path.startswith("/"):
-        path = "/" + path
-
-    query = str(
-        business.get("research_query")
-        or business.get("requested_query")
-        or f"{business.get('industry', '')} in {business.get('city', '')}"
-    ).strip()
-    if not query:
-        raise ResearchWorkerError("Research query cannot be empty")
-
-    payload = {
-        "query": query[:300],
-        "location": str(business.get("city") or "").strip() or None,
-        "country": "in",
-        "language": "en",
-        "max_results": max(1, min(int(os.getenv("RESEARCH_WORKER_MAX_RESULTS", "10")), 50)),
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=_timeout()) as client:
-            response = await client.post(base + path, json=payload, headers=_headers())
-            response.raise_for_status()
-    except httpx.HTTPStatusError as exc:
-        detail = exc.response.text[:500] if exc.response is not None else ""
-        raise ResearchWorkerError(
-            f"Research Worker returned HTTP {exc.response.status_code}: {detail}"
-        ) from exc
-    except httpx.HTTPError as exc:
-        raise ResearchWorkerError(f"Research Worker request failed: {exc}") from exc
-
-    try:
-        data = response.json()
-    except ValueError as exc:
-        raise ResearchWorkerError("Research Worker returned invalid JSON") from exc
-
-    if not isinstance(data, dict):
-        raise ResearchWorkerError("Research Worker returned an invalid response")
-
-    # Preserve worker response intact under a stable envelope for LeadHunter.
-    return {
-        "research_status": "COMPLETE",
-        "source": "leadhunter-research-worker",
-        "worker_version": data.get("version") or "0.5.1",
-        "serp": data.get("results") if isinstance(data.get("results"), list) else data.get("serp", data),
-        "worker_response": data,
-    }
-
-
-async def worker_status() -> dict[str, Any]:
-    """Read the public worker health endpoint without sending the API key."""
-    base = _base()
-    try:
-        async with httpx.AsyncClient(timeout=8) as client:
-            response = await client.get(base + "/health")
-            response.raise_for_status()
-            data = response.json()
-        return {
-            "configured": True,
-            "reachable": True,
-            "response": data,
-        }
-    except Exception as exc:
-        return {
-            "configured": True,
-            "reachable": False,
-            "error": f"{type(exc).__name__}: {exc}",
-        }
+class ResearchWorkerError(RuntimeError): pass
+def configured()->bool:return bool(os.getenv("RESEARCH_WORKER_URL","").strip() and os.getenv("WORKER_API_KEY","").strip())
+def _base()->str:
+ v=os.getenv("RESEARCH_WORKER_URL","").strip().rstrip("/")
+ if not v: raise ResearchWorkerError("RESEARCH_WORKER_URL is not configured")
+ return v
+def _headers()->dict[str,str]:
+ k=os.getenv("WORKER_API_KEY","").strip()
+ if not k: raise ResearchWorkerError("WORKER_API_KEY is not configured")
+ return {"X-API-Key":k}
+def _timeout()->float:
+ try:return max(5,min(float(os.getenv("RESEARCH_WORKER_TIMEOUT","90")),300))
+ except ValueError:raise ResearchWorkerError("RESEARCH_WORKER_TIMEOUT must be numeric")
+async def research_business(business:dict[str,Any])->dict[str,Any]:
+ if not configured(): return {}
+ path=os.getenv("RESEARCH_WORKER_PATH","/serp").strip() or "/serp"; path=path if path.startswith("/") else "/"+path
+ query=str(business.get("research_query") or business.get("requested_query") or f"{business.get('name','')} {business.get('city','')}").strip()
+ if not query: raise ResearchWorkerError("Research query cannot be empty")
+ payload={"query":query[:300],"location":str(business.get("city") or "").strip() or None,"country":"in","language":"en","max_results":max(1,min(int(os.getenv("RESEARCH_WORKER_MAX_RESULTS","10")),50))}
+ try:
+  async with httpx.AsyncClient(timeout=_timeout()) as c:r=await c.post(_base()+path,json=payload,headers=_headers());r.raise_for_status()
+ except httpx.HTTPStatusError as e:raise ResearchWorkerError(f"Worker HTTP {e.response.status_code}: {e.response.text[:300]}") from e
+ except httpx.HTTPError as e:raise ResearchWorkerError(f"Worker request failed: {e}") from e
+ try:data=r.json()
+ except ValueError as e:raise ResearchWorkerError("Worker returned invalid JSON") from e
+ if not isinstance(data,dict):raise ResearchWorkerError("Worker returned invalid response")
+ return {"source":"leadhunter-research-worker","worker_version":data.get("version") or "unknown","serp":data.get("results") or data.get("serp") or [],"worker_response":data}
+async def worker_status()->dict[str,Any]:
+ if not os.getenv("RESEARCH_WORKER_URL","").strip():return {"configured":False,"reachable":False}
+ try:
+  async with httpx.AsyncClient(timeout=8) as c:r=await c.get(_base()+"/health");r.raise_for_status();data=r.json()
+  return {"configured":configured(),"reachable":True,"response":data}
+ except Exception as e:return {"configured":configured(),"reachable":False,"error":f"{type(e).__name__}: {e}"}
