@@ -106,13 +106,13 @@ def score_lead(research: dict) -> dict:
         breakdown.append(("No publicly found email", 3))
         reasons.append("No public business email was found in the researched sources.")
 
-    rank = google.get("local_rank")
+    rank = google.get("local_rank") if google.get("status") != "NOT_CONFIGURED" else None
     if rank:
         bonus = 10 if int(rank) > 10 else 6 if int(rank) > 5 else 2
         score += bonus
-        breakdown.append((f"Provider result position #{int(rank)}", bonus))
+        breakdown.append((f"Discovery provider result position #{int(rank)}", bonus))
         if int(rank) > 5:
-            reasons.append(f"Google Places result position is #{int(rank)} for the tested discovery query.")
+            reasons.append(f"Provider result position is #{int(rank)} for the tested discovery query; this is not an exact Google Maps ranking.")
 
     buying_bonus = min(6, len(buying) * 2)
     if buying_bonus:
