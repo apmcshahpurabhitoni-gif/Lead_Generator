@@ -1,15 +1,18 @@
-"""
-LeadHunter Dashboard 4.0
-Run: mounted by main.py or directly with `uvicorn dashboard:app`.
-"""
-from fastapi import FastAPI
+"""LeadHunter Dashboard — mounted by main.py at /dashboard."""
+from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
-from dashboard_ui.api import router
+from config import APP_VERSION
+from dashboard_ui.api import router as api_router
 from dashboard_ui.templates import DASHBOARD_HTML
 
-app = FastAPI(title="LeadHunter Dashboard", version="4.0.0")
-app.include_router(router, prefix="/api")
+__APP_VERSION__ = APP_VERSION
+router = APIRouter()
+router.include_router(api_router, prefix="/api")
 
-@app.get("/", response_class=HTMLResponse)
+@router.get("/dashboard", response_class=HTMLResponse, include_in_schema=False)
 async def dashboard():
+    return DASHBOARD_HTML
+
+@router.get("/dashboard/", response_class=HTMLResponse, include_in_schema=False)
+async def dashboard_slash():
     return DASHBOARD_HTML
