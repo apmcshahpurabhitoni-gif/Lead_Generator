@@ -3,6 +3,9 @@
 Local Business Discovery & Intelligence Platform.
 
 ## Dashboard
+Authentication is enabled by default. Configure `DASHBOARD_USER`, `DASHBOARD_PASSWORD`, and `SESSION_SECRET`, then open `/login`.
+
+## Dashboard
 Open `/dashboard`.
 
 - 🏠 Overview
