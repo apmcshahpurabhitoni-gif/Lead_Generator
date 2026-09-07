@@ -1,6 +1,20 @@
 # Changelog
 
 ## v4.0.0 — 2026-09-07
+- Secure dashboard login, session authentication, CSRF protection and logout.
+- Dashboard routes and API routes protected centrally.
+- Optional Telegram and Research Worker startup with service status reporting.
+- Dataset-based Explore workflow and reusable completed datasets.
+- Discovery job polling and real completion states.
+- Real Research Worker persistence and AI pitch generation.
+- Real analytics and outreach API wiring.
+- Dashboard rewritten to use real APIs instead of placeholder pages.
+- Duplicate and redundant migrations removed.
+- Authentication tests and configuration documentation added.
+
+# Changelog
+
+## v4.0.0 — 2026-09-07
 ### Dashboard
 - Added the Dashboard 4.0 route at `/dashboard`.
 - Kept compact expandable lead cards, four themes and responsive navigation.
