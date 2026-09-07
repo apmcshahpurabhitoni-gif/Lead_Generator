@@ -1,37 +1,21 @@
 # Changelog
 
+## v4.1.0 — 2026-09-07
+- Added one canonical future-ready Research Data Contract.
+- Added explicit AVAILABLE, NOT_FOUND, NOT_CONFIGURED and FAILED states.
+- Added Research Worker response normalization before scoring and persistence.
+- Dashboard now displays research intelligence and unavailable future modules correctly.
+- Added visible dashboard version v4.1.0.
+- Discovery works when the optional Research Worker is not configured.
+- Fixed failed-login throttling so successful logins do not consume attempts.
+- Added CSRF validation to logout.
+- AI fallback now refuses to fabricate personalized observations without verified intelligence.
+- Replaced artificial job progress with database-backed progress.
+- Clarified provider result positions so they are not presented as exact Maps rankings.
+- Removed contradictory README and duplicate changelog content.
+
 ## v4.0.0 — 2026-09-07
-- Secure dashboard login, session authentication, CSRF protection and logout.
-- Dashboard routes and API routes protected centrally.
-- Optional Telegram and Research Worker startup with service status reporting.
-- Dataset-based Explore workflow and reusable completed datasets.
-- Discovery job polling and real completion states.
-- Real Research Worker persistence and AI pitch generation.
-- Real analytics and outreach API wiring.
-- Dashboard rewritten to use real APIs instead of placeholder pages.
-- Duplicate and redundant migrations removed.
-- Authentication tests and configuration documentation added.
-
-# Changelog
-
-## v4.0.0 — 2026-09-07
-### Dashboard
-- Added the Dashboard 4.0 route at `/dashboard`.
-- Kept compact expandable lead cards, four themes and responsive navigation.
-- Removed fake overview and analytics placeholder responses.
-
-### Wiring
-- Dashboard now uses the canonical `Database` instance from FastAPI application state.
-- Discovery creates persisted DISCOVERY jobs and runs the canonical workflow.
-- Dataset results come from authoritative `search_results` relationships.
-- Research loads the real lead before calling the Research Worker.
-- Research results are scored and persisted through the canonical database layer.
-- Pitch generation now reports explicit `501 Not Implemented` until a real backend exists.
-
-### Integrity
-- Version synchronized to 4.0.0.
-- Dashboard exposes a router compatible with `main.py`.
-- Dashboard JavaScript test target updated to the template source.
+- Dashboard authentication and dataset workflow release.
 
 ## v3.3.0 — 2026-09-06
 - Previous wiring and deployment release.
