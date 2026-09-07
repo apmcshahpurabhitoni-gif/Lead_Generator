@@ -2,7 +2,7 @@ import logging,os,secrets
 from contextlib import asynccontextmanager
 from fastapi import FastAPI,HTTPException,Request
 from fastapi.responses import HTMLResponse,RedirectResponse
-from bot import create_application
+from bot import create_application,notify_bot_started
 from database import Database
 from dashboard import router as dashboard_router
 from config import APP_VERSION
@@ -15,7 +15,7 @@ def validate_configuration():
 async def lifespan(app):
  validate_configuration();app.state.db=Database();app.state.service_status={"database":True,"telegram":False,"research_worker":False,"ai_provider":bool(os.getenv("OLLAMA_API_KEY",""))}
  if all(os.getenv(x,"").strip() for x in ("TELEGRAM_BOT_TOKEN","TELEGRAM_WEBHOOK_SECRET","WEBHOOK_BASE_URL")):
-  app.state.bot=create_application(app.state.db);await app.state.bot.initialize();await app.state.bot.start();app.state.service_status["telegram"]=True
+  app.state.bot=create_application(app.state.db);app.state.bot.bot_data["version"]=APP_VERSION;await app.state.bot.initialize();await app.state.bot.start();app.state.service_status["telegram"]=True;await notify_bot_started(app.state.bot)
  else:app.state.bot=None
  app.state.worker_status=await worker_status();app.state.service_status["research_worker"]=bool(app.state.worker_status.get("reachable"))
  try:yield
