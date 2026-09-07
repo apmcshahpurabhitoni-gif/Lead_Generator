@@ -1,63 +1,37 @@
-# LeadHunter v4.0.0
+# LeadHunter v4.1.0
 
 Local Business Discovery & Intelligence Platform.
 
 ## Dashboard
-Authentication is enabled by default. Configure `DASHBOARD_USER`, `DASHBOARD_PASSWORD`, and `SESSION_SECRET`, then open `/login`.
+Open /login, then /dashboard.
 
-## Dashboard
-Open `/dashboard`.
+The dashboard displays v4.1.0 and uses four themes: Default, Dark, Neo Light and Neo Dark.
 
-- 🏠 Overview
-- 🔍 Find Leads
-- ◈ Explore persisted discovery datasets
-- 📊 Analytics from real database data
-- 📤 Outreach pipeline
-- 🎨 Four themes
-- 📱 Responsive mobile navigation
+## Research Data States
+- 🟢 AVAILABLE — verified data is available.
+- ❌ NOT_FOUND — checked and no item was found.
+- ⚪ NOT_CONFIGURED — future data source is not connected yet.
+- ⚠️ FAILED — configured check failed.
+
+LeadHunter never converts unavailable future intelligence into a fake zero or false missing finding.
 
 ## Architecture
-```text
-Dashboard / Telegram
-        ↓
-      FastAPI
-        ↓
- Canonical Database
-        ↓
-Discovery Workflow
-        ↓
-Google Places / OSM
-        ↓
-Persisted Leads + search_results
-        ↓
-Research Worker Client
-        ↓
-Research Worker / SearXNG
-        ↓
-Scoring + Persistence
-```
+Dashboard / Telegram → FastAPI → Database → Discovery → Research Worker → Research Normalizer → Scoring → Dashboard / AI Pitch / Outreach.
 
-## Data integrity
-LeadHunter does not fabricate Google rankings, Maps rankings, review history, owner response rates or website findings. Unavailable intelligence is shown as unavailable.
+Current and future modules share one contract: Website, Google Business, Reviews, Search intelligence, Organic ranking, Maps ranking, Competitors, Keywords and Social intelligence.
+
+Paused modules already appear as NOT CONFIGURED and can become AVAILABLE later without dashboard redesign when the worker supplies contract-compatible data.
+
+## Configuration
+See .env.example.
+Required: SUPABASE_URL and SUPABASE_KEY.
+Dashboard authentication: DASHBOARD_AUTH_ENABLED, DASHBOARD_USER, DASHBOARD_PASSWORD and SESSION_SECRET.
+
+Research Worker is optional. Discovery and dashboard continue to work without it; worker-backed intelligence is shown as NOT_CONFIGURED.
 
 ## Run
-```bash
 uvicorn main:app --reload
-```
-
-Open:
-`http://127.0.0.1:8000/dashboard`
-
-## Required configuration
-See `.env.example`. Production requires Telegram, Supabase and Research Worker variables configured.
-
-## Important
-Dashboard v4 is wired to the canonical `Database`, `lead_workflow`, `discovery` and `research_client` modules. Pitch generation is intentionally unavailable until a real backend implementation exists; the dashboard returns an explicit 501 instead of fake output.
-
-## Testing
-```bash
 pytest -q
-```
 
-**Version:** 4.0.0  
-**Release date:** 2026-09-07
+Version: 4.1.0
+Release date: 2026-09-07
