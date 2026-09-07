@@ -26,9 +26,8 @@ async def lifespan(app):
 app=FastAPI(title="LeadHunter",version=APP_VERSION,lifespan=lifespan)
 app.include_router(dashboard_router)
 @app.get("/",response_class=HTMLResponse,include_in_schema=False)
-async def root():return RedirectResponse("/dashboard",302)
-@app.head("/")
-async def root_head():return None
+async def root():
+ return dashboard_router.routes[-2].endpoint.__globals__["DASHBOARD_HTML"]
 @app.get("/health")
 async def health():return {"ok":True,"service":"leadhunter","version":APP_VERSION}
 @app.get("/system/status")
