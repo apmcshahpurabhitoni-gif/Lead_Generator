@@ -1,109 +1,64 @@
-import logging, os, secrets
+import logging,os,secrets
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI,HTTPException,Request,Response
+from fastapi.responses import HTMLResponse,RedirectResponse
+from starlette.middleware.sessions import SessionMiddleware
+from pydantic import BaseModel
 from bot import create_application
 from database import Database
 from dashboard import router as dashboard_router
-from config import APP_VERSION, RELEASE_DATE, WHATS_NEW
+from config import APP_VERSION
 from research_client import worker_status
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
-log = logging.getLogger("leadhunter")
-REQUIRED = ("TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET", "WEBHOOK_BASE_URL", "SUPABASE_URL", "SUPABASE_KEY", "DASHBOARD_USER", "DASHBOARD_PASSWORD", "RESEARCH_WORKER_URL", "WORKER_API_KEY")
-
-def required(name: str) -> str:
-    value = os.getenv(name, "").strip()
-    if not value:
-        raise RuntimeError(f"Missing required environment variable: {name}")
-    return value
-
-def validate_configuration() -> None:
-    missing = [name for name in REQUIRED if not os.getenv(name, "").strip()]
-    if missing:
-        raise RuntimeError("Missing required environment variables: " + ", ".join(missing))
-
-def safe_url(url: str) -> str:
-    parts = url.rstrip("/").split("/")
-    return "/".join(parts[:-1] + ["***"]) if len(parts) > 1 else "***"
-
-async def configure_webhook(application: FastAPI) -> dict:
-    bot_app = application.state.bot
-    base = required("WEBHOOK_BASE_URL").rstrip("/")
-    secret = required("TELEGRAM_WEBHOOK_SECRET")
-    expected = f"{base}/telegram/webhook"
-    info = await bot_app.bot.get_webhook_info()
-    if info.url != expected:
-        await bot_app.bot.set_webhook(url=expected, secret_token=secret, allowed_updates=["message", "callback_query"], max_connections=5, drop_pending_updates=False)
-        info = await bot_app.bot.get_webhook_info()
-    application.state.webhook_url = expected
-    application.state.webhook_configured = info.url == expected
-    return {"configured": application.state.webhook_configured, "url": safe_url(info.url)}
-
-async def startup_messages(application: FastAPI) -> None:
-    admin = os.getenv("ADMIN_TELEGRAM_ID", "").strip()
-    if not admin:
-        return
-    dashboard_url = os.getenv("DASHBOARD_URL", "").strip() or (required("WEBHOOK_BASE_URL").rstrip("/") + "/dashboard")
-    started = ("🟢 <b>LEADHUNTER BOT STARTED</b>\n━━━━━━━━━━━━━━━━━━━━\n" f"🤖 Status: <b>ONLINE</b>\n📦 Version: <b>v{APP_VERSION}</b>\n📅 Release: <b>{RELEASE_DATE}</b>\n🔗 Telegram: <b>CONNECTED</b>\n📊 Dashboard: <a href=\"{dashboard_url}\">OPEN DASHBOARD</a>")
-    whats_new = f"🆕 <b>WHAT'S NEW · v{APP_VERSION}</b>\n━━━━━━━━━━━━━━━━━━━━\n\n" + "\n".join(WHATS_NEW)
-    try:
-        await application.state.bot.bot.send_message(chat_id=int(admin), text=started, parse_mode="HTML")
-        await application.state.bot.bot.send_message(chat_id=int(admin), text=whats_new, parse_mode="HTML")
-    except Exception:
-        log.exception("Startup messages failed")
-
+from auth import validate_auth_config,enabled as auth_enabled,verify_credentials,check_login_rate_limit,create_session
+logging.basicConfig(level=logging.INFO); log=logging.getLogger("leadhunter")
+class LoginRequest(BaseModel): username:str; password:str
+def validate_configuration():
+    missing=[x for x in ("SUPABASE_URL","SUPABASE_KEY") if not os.getenv(x,"").strip()]
+    if missing: raise RuntimeError("Missing required environment variables: "+", ".join(missing))
+    validate_auth_config()
 @asynccontextmanager
-async def lifespan(application: FastAPI):
-    validate_configuration()
-    application.state.db = Database()
-    application.state.bot = create_application(application.state.db)
-    application.state.bot.bot_data.update({"version": APP_VERSION, "release_date": RELEASE_DATE, "whats_new": WHATS_NEW})
-    await application.state.bot.initialize(); await application.state.bot.start()
-    me = await application.state.bot.bot.get_me()
-    application.state.bot_identity = {"id": me.id, "username": me.username or "", "first_name": me.first_name or ""}
-    await configure_webhook(application)
-    application.state.worker_status = await worker_status()
-    if not application.state.worker_status.get("reachable"):
-        log.warning("Research Worker is not reachable: %s", application.state.worker_status)
-    await startup_messages(application)
-    log.info("LeadHunter startup complete | version=%s", APP_VERSION)
+async def lifespan(app):
+    validate_configuration(); app.state.db=Database()
+    app.state.service_status={"database":True,"telegram":False,"research_worker":False,"ai_provider":bool(os.getenv("OLLAMA_API_KEY",""))}
+    if all(os.getenv(x,"").strip() for x in ("TELEGRAM_BOT_TOKEN","TELEGRAM_WEBHOOK_SECRET","WEBHOOK_BASE_URL")):
+        app.state.bot=create_application(app.state.db); await app.state.bot.initialize(); await app.state.bot.start(); app.state.service_status["telegram"]=True
+    else: app.state.bot=None
+    if os.getenv("RESEARCH_WORKER_URL","").strip():
+        app.state.worker_status=await worker_status(); app.state.service_status["research_worker"]=bool(app.state.worker_status.get("reachable"))
+    else: app.state.worker_status={"configured":False,"reachable":False}
     try: yield
     finally:
-        try: await application.state.bot.stop(); await application.state.bot.shutdown()
-        except Exception: log.exception("Telegram shutdown failed")
-
-app = FastAPI(title="LeadHunter", version=APP_VERSION, lifespan=lifespan)
+        if getattr(app.state,"bot",None):
+            try: await app.state.bot.stop(); await app.state.bot.shutdown()
+            except Exception: log.exception("Telegram shutdown failed")
+app=FastAPI(title="LeadHunter",version=APP_VERSION,lifespan=lifespan)
+app.add_middleware(SessionMiddleware,secret_key=os.getenv("SESSION_SECRET","development-only-change-me"),session_cookie="leadhunter_session",max_age=86400,same_site="lax",https_only=os.getenv("ENVIRONMENT","development").lower()=="production")
 app.include_router(dashboard_router)
-
+@app.get("/login",response_class=HTMLResponse,include_in_schema=False)
+async def login_page(request:Request):
+    if not auth_enabled() or request.session.get("authenticated"): return RedirectResponse("/dashboard",302)
+    return HTMLResponse("<!doctype html><html><body><h1>🔎 LeadHunter</h1><form onsubmit='return false'><input id=u placeholder=Username><input id=p type=password placeholder=Password><button onclick=\"fetch('/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u.value,password:p.value})}).then(r=>r.ok?location='/dashboard':alert('Invalid username or password'))\">Sign In</button></form></body></html>")
+@app.post("/auth/login")
+async def login(req:LoginRequest,request:Request):
+    if not auth_enabled(): return {"ok":True,"authenticated":True}
+    check_login_rate_limit(request)
+    if not verify_credentials(req.username,req.password): raise HTTPException(401,"Invalid username or password")
+    create_session(request,req.username); return {"ok":True,"authenticated":True,"csrf_token":request.session["csrf_token"]}
+@app.post("/auth/logout")
+async def logout(request:Request): request.session.clear(); return {"ok":True}
+@app.get("/auth/status")
+async def auth_status(request:Request): return {"authenticated":not auth_enabled() or bool(request.session.get("authenticated")),"username":request.session.get("username"),"csrf_token":request.session.get("csrf_token")}
 @app.get("/")
-async def root():
-    return {"ok": True, "service": "leadhunter", "version": APP_VERSION, "release_date": RELEASE_DATE, "status": "healthy", "health": "/health", "system": "/system/status"}
-
-@app.head("/")
-async def root_head(): return Response(status_code=200)
-
+async def root(): return {"ok":True,"service":"leadhunter","version":APP_VERSION}
 @app.get("/health")
-async def health(): return {"ok": True, "service": "leadhunter", "version": APP_VERSION, "status": "healthy"}
-
+async def health(): return {"ok":True,"service":"leadhunter","version":APP_VERSION}
 @app.get("/system/status")
-async def system_status(request: Request):
-    worker = await worker_status() if os.getenv("RESEARCH_WORKER_URL", "").strip() else {"configured": False, "reachable": False}
-    request.app.state.worker_status = worker
-    return {"ok": bool(worker.get("reachable")), "version": APP_VERSION, "database": "configured" if os.getenv("SUPABASE_URL", "").strip() else "missing", "telegram": "ready" if getattr(request.app.state, "bot", None) else "not_ready", "research_worker": worker}
-
+async def system_status(request:Request): return {"ok":True,"version":APP_VERSION,"services":getattr(request.app.state,"service_status",{})}
 @app.post("/telegram/webhook")
-async def telegram_webhook(request: Request):
-    expected = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip(); header_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
-    if not expected or not secrets.compare_digest(header_secret, expected): raise HTTPException(403, "Invalid Telegram secret token")
-    bot_app = getattr(request.app.state, "bot", None)
-    if not bot_app: raise HTTPException(503, "Telegram bot is not ready")
+async def telegram_webhook(request:Request):
+    expected=os.getenv("TELEGRAM_WEBHOOK_SECRET",""); header=request.headers.get("X-Telegram-Bot-Api-Secret-Token","")
+    if not expected or not secrets.compare_digest(header,expected): raise HTTPException(403,"Invalid Telegram secret token")
+    bot=getattr(request.app.state,"bot",None)
+    if not bot: raise HTTPException(503,"Telegram bot is not ready")
     from telegram import Update
-    update = Update.de_json(await request.json(), bot_app.bot); await bot_app.update_queue.put(update)
-    return {"ok": True}
-
-@app.get("/telegram/status")
-async def telegram_status(request: Request):
-    return {"ok": True, "configured": all(os.getenv(x, "").strip() for x in ("TELEGRAM_BOT_TOKEN","WEBHOOK_BASE_URL","TELEGRAM_WEBHOOK_SECRET")), "bot_running": bool(getattr(request.app.state, "bot", None)), "webhook_configured": bool(getattr(request.app.state, "webhook_configured", False))}
-
-@app.get("/version")
-async def version(): return {"ok": True, "service": "leadhunter", "version": APP_VERSION, "release_date": RELEASE_DATE, "whats_new": WHATS_NEW}
+    await bot.update_queue.put(Update.de_json(await request.json(),bot.bot)); return {"ok":True}
