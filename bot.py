@@ -153,5 +153,12 @@ async def callbacks(u,c):
   elif a=="deal":
    rows=await db.list_deals(20); await edit(q,"💰 <b>DEAL PIPELINE</b>\n━━━━━━━━━━━━━━━━━━━━\n\n"+("\n".join(f"💰 <b>{html.escape(str(x['business_name']))}</b> · {x['stage']} · ₹{x.get('value') or '—'}" for x in rows) or "No deals yet."),menu())
  except Exception as e: log.exception("callback failed"); await edit(q,"❌ <b>ACTION FAILED</b>\n\n"+html.escape(str(e)[:700]),menu())
+async def notify_bot_started(app):
+ chat_id=os.getenv("ADMIN_TELEGRAM_ID","").strip()
+ if not chat_id:return
+ try:
+  version=app.bot_data.get("version","unknown")
+  await app.bot.send_message(chat_id=int(chat_id),text=f"🟢 <b>LEADHUNTER BOT ONLINE</b>\n━━━━━━━━━━━━━━━━━━━━\n🤖 Bot started successfully\n📦 Version: <b>v{html.escape(str(version))}</b>\n🌐 Dashboard: https://lead-generator-zzty.onrender.com/dashboard",parse_mode="HTML",reply_markup=menu())
+ except Exception: log.exception("Could not send startup notification")
 def create_application(db:Database):
  app=Application.builder().token(os.environ["TELEGRAM_BOT_TOKEN"]).build(); app.bot_data["db"]=db; app.add_handler(CallbackQueryHandler(callbacks)); app.add_handler(CommandHandler("start",start)); app.add_handler(CommandHandler("version",version_command)); app.add_handler(CommandHandler("help",help_command)); app.add_handler(CommandHandler("find",find_command)); app.add_handler(CommandHandler("lead",lead_command)); app.add_handler(CommandHandler("today",today_command)); app.add_handler(CommandHandler("stats",stats_command)); app.add_handler(CommandHandler("followups",followups_command)); return app
