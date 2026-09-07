@@ -3,7 +3,7 @@
 Local Business Discovery & Intelligence Platform.
 
 ## Dashboard
-Open /login, then /dashboard.
+Open `/dashboard`. No login or password is required.
 
 The dashboard displays v4.1.0 and uses four themes: Default, Dark, Neo Light and Neo Dark.
 
@@ -18,14 +18,9 @@ LeadHunter never converts unavailable future intelligence into a fake zero or fa
 ## Architecture
 Dashboard / Telegram → FastAPI → Database → Discovery → Research Worker → Research Normalizer → Scoring → Dashboard / AI Pitch / Outreach.
 
-Current and future modules share one contract: Website, Google Business, Reviews, Search intelligence, Organic ranking, Maps ranking, Competitors, Keywords and Social intelligence.
-
-Paused modules already appear as NOT CONFIGURED and can become AVAILABLE later without dashboard redesign when the worker supplies contract-compatible data.
-
 ## Configuration
 See .env.example.
 Required: SUPABASE_URL and SUPABASE_KEY.
-Dashboard authentication: DASHBOARD_AUTH_ENABLED, DASHBOARD_USER, DASHBOARD_PASSWORD and SESSION_SECRET.
 
 Research Worker is optional. Discovery and dashboard continue to work without it; worker-backed intelligence is shown as NOT_CONFIGURED.
 
