@@ -16,11 +16,17 @@ def db(r:Request)->Database:return r.app.state.db
 async def health(r:Request): return {"ok":True,"services":getattr(r.app.state,"service_status",{})}
 @router.get("/overview")
 async def overview(r:Request):
-    d=db(r); leads=await d.list_leads(limit=1000); datasets=await d.list_searches(limit=100)
+    d=db(r)
+    try:
+        leads=await d.list_leads(limit=1000); datasets=await d.list_searches(limit=100)
+    except Exception as e:
+        raise HTTPException(503,f"Dashboard database unavailable: {type(e).__name__}: {str(e)[:200]}")
     researched=sum(1 for x in leads if x.get("score") is not None or x.get("status") in {"RESEARCHED","QUALIFIED"}); qualified=sum(1 for x in leads if x.get("status")=="QUALIFIED")
     return {"ok":True,"metrics":{"datasets":len(datasets),"leads":len(leads),"researched":researched,"ready":qualified},"recent":datasets[:5]}
 @router.get("/datasets")
-async def datasets(r:Request,limit:int=50): return {"ok":True,"items":await db(r).list_searches(limit=limit)}
+async def datasets(r:Request,limit:int=50):
+    try:return {"ok":True,"items":await db(r).list_searches(limit=limit)}
+    except Exception as e:raise HTTPException(503,f"Datasets unavailable: {type(e).__name__}: {str(e)[:200]}")
 @router.post("/discover")
 async def discover(req:SearchRequest,r:Request):
     d=db(r); city=req.city.strip(); industry=req.category.strip(); existing=await d.list_searches(limit=100)
