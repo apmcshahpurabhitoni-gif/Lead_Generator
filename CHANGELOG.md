@@ -1,5 +1,14 @@
 # Changelog
 
+## v4.3.1 — 2026-09-16
+- Registered the Telegram webhook during application startup using `WEBHOOK_BASE_URL` and the configured secret token.
+- Added safe Telegram webhook cleanup on application shutdown.
+- Passed release date and What's New metadata into the Telegram bot runtime.
+- Fixed direct Act → Lead navigation so it cannot be overwritten by an asynchronous dataset load.
+- Added API boundary validation for lead IDs, dataset IDs, job IDs and dataset query limits.
+- Replaced the mutable outreach services default with a safe Pydantic default factory and bounded notes.
+- Extended dashboard JavaScript syntax regression coverage to the separate runtime adapter.
+
 ## v4.3.0 — 2026-09-16
 - Hardened the dashboard API/UI contract instead of relying on frontend guesses.
 - Analytics now exposes canonical nested totals plus explicit flat aliases consumed by the dashboard.
