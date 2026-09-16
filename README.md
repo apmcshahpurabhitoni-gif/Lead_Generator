@@ -1,17 +1,18 @@
-# LeadHunter v4.3.1
+# LeadHunter v4.3.2
 
 Local Business Discovery & Intelligence Platform.
 
 ## Dashboard
 Open `/dashboard`. No login or password is required.
 
-The dashboard is dataset-first: choose a business type and city, run discovery, select a completed dataset, and its lead records load directly without typing internal IDs. Lead cards are collapsed by default and expand to show the available business record and actions.
+The dashboard is dataset-first: choose a business type and city, run discovery, then use the Leads workspace dataset dropdown to select a completed dataset. Its lead records load directly without typing internal IDs. Lead cards are collapsed by default and expand to show the available business record and actions.
 
 Four locked visual themes are retained: Light Modern, Dark Modern, Light Neo and Dark Neo.
 
 ## Runtime wiring
 - Dashboard UI calls the real `/dashboard/api/*` contract.
 - Dataset selection resolves through `/dashboard/api/datasets/{id}/leads`.
+- The Leads workspace provides a real dataset dropdown; changing it reloads the selected dataset's lead records.
 - Lead actions resolve through `/dashboard/api/leads/{id}` and its research/pitch endpoints.
 - Act/Outreach resolves saved opportunities back to the first-class lead record.
 - Telegram uses `/telegram/webhook`; startup registers the webhook against `WEBHOOK_BASE_URL` and verifies requests with `TELEGRAM_WEBHOOK_SECRET`.
@@ -52,5 +53,5 @@ uvicorn main:app --reload
 pytest -q
 ```
 
-Version: 4.3.1  
+Version: 4.3.2  
 Release date: 2026-09-16
