@@ -1,12 +1,14 @@
-from fastapi import APIRouter, HTTPException, Request
+import asyncio
+
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
+
+from ai import generate_whatsapp_message
 from database import Database
 from lead_workflow import run_discovery_job
 from research_client import research_business
 from research_schema import normalize_research
 from scoring import score_lead
-from ai import generate_whatsapp_message
-import asyncio
 
 router = APIRouter()
 
@@ -20,9 +22,9 @@ class SearchRequest(BaseModel):
 
 class OutreachRequest(BaseModel):
     stage: str = Field(default="READY", max_length=30)
-    notes: str = ""
+    notes: str = Field(default="", max_length=2000)
     value: float | None = None
-    services: list[str] = []
+    services: list[str] = Field(default_factory=list, max_length=20)
 
 
 def db(r: Request) -> Database:
@@ -44,7 +46,7 @@ async def overview(r: Request):
         raise HTTPException(
             503,
             f"Dashboard database unavailable: {type(e).__name__}: {str(e)[:200]}",
-        )
+        ) from e
 
     researched = sum(
         1
@@ -66,13 +68,13 @@ async def overview(r: Request):
 
 
 @router.get("/datasets")
-async def datasets(r: Request, limit: int = 50):
+async def datasets(r: Request, limit: int = Query(default=50, ge=1, le=100)):
     try:
         return {"ok": True, "items": await db(r).list_searches(limit=limit)}
     except Exception as e:
         raise HTTPException(
             503, f"Datasets unavailable: {type(e).__name__}: {str(e)[:200]}"
-        )
+        ) from e
 
 
 @router.post("/discover")
@@ -80,6 +82,7 @@ async def discover(req: SearchRequest, r: Request):
     d = db(r)
     city = req.city.strip()
     industry = req.category.strip()
+
     existing = await d.list_searches(limit=100)
     match = next(
         (
@@ -103,9 +106,8 @@ async def discover(req: SearchRequest, r: Request):
     job_id = await d.create_job("DISCOVERY", city, industry)
     if not job_id:
         raise HTTPException(500, "Could not create discovery job")
-    asyncio.create_task(
-        run_discovery_job(job_id, city, industry, req.max_results)
-    )
+
+    asyncio.create_task(run_discovery_job(job_id, city, industry, req.max_results))
     return {
         "ok": True,
         "job_id": job_id,
@@ -117,16 +119,19 @@ async def discover(req: SearchRequest, r: Request):
 
 @router.get("/jobs/{job_id}")
 async def job(job_id: int, r: Request):
+    if job_id <= 0:
+        raise HTTPException(422, "Invalid job ID")
     item = await db(r).get_job(job_id)
     if not item:
         raise HTTPException(404, "Job not found")
+
     processed = int(item.get("processed") or 0)
     succeeded = int(item.get("succeeded") or 0)
-    done = succeeded + int(item.get("failed") or 0)
-    progress = (
-        100
-        if item.get("status") in {"DONE", "FAILED"}
-        else (min(95, round(done / max(processed, 1) * 100)) if processed else 5)
+    failed = int(item.get("failed") or 0)
+    done = succeeded + failed
+    status = str(item.get("status") or "RUNNING")
+    progress = 100 if status in {"DONE", "FAILED"} else (
+        min(95, round(done / max(processed, 1) * 100)) if processed else 5
     )
     return {
         "ok": True,
@@ -137,20 +142,30 @@ async def job(job_id: int, r: Request):
 
 
 @router.get("/datasets/{search_id}/leads")
-async def dataset_leads(search_id: int, r: Request, limit: int = 100):
+async def dataset_leads(
+    search_id: int,
+    r: Request,
+    limit: int = Query(default=100, ge=1, le=1000),
+):
+    if search_id <= 0:
+        raise HTTPException(422, "Invalid dataset ID")
     d = db(r)
     dataset = await d.get_search(search_id)
     if not dataset:
         raise HTTPException(404, "Dataset not found")
-    return {
-        "ok": True,
-        "dataset": dataset,
-        "items": await d.list_search_results(search_id, limit=limit),
-    }
+    try:
+        items = await d.list_search_results(search_id, limit=limit)
+    except Exception as e:
+        raise HTTPException(
+            503, f"Dataset leads unavailable: {type(e).__name__}: {str(e)[:200]}"
+        ) from e
+    return {"ok": True, "dataset": dataset, "items": items}
 
 
 @router.get("/leads/{lead_id}")
 async def lead_detail(lead_id: int, r: Request):
+    if lead_id <= 0:
+        raise HTTPException(422, "Invalid lead ID")
     d = db(r)
     item = await d.get_lead(lead_id)
     if not item:
@@ -161,6 +176,8 @@ async def lead_detail(lead_id: int, r: Request):
 
 @router.post("/leads/{lead_id}/research")
 async def research(lead_id: int, r: Request):
+    if lead_id <= 0:
+        raise HTTPException(422, "Invalid lead ID")
     d = db(r)
     lead = await d.get_lead(lead_id)
     if not lead:
@@ -175,11 +192,13 @@ async def research(lead_id: int, r: Request):
     except Exception as e:
         raise HTTPException(
             502, f"Research failed: {type(e).__name__}: {str(e)[:300]}"
-        )
+        ) from e
 
 
 @router.post("/leads/{lead_id}/pitch")
 async def pitch(lead_id: int, r: Request):
+    if lead_id <= 0:
+        raise HTTPException(422, "Invalid lead ID")
     d = db(r)
     lead = await d.get_lead(lead_id)
     if not lead:
@@ -188,18 +207,12 @@ async def pitch(lead_id: int, r: Request):
     try:
         message = await generate_whatsapp_message(lead, research)
     except Exception as e:
-        raise HTTPException(502, f"Pitch generation failed: {type(e).__name__}")
+        raise HTTPException(502, f"Pitch generation failed: {type(e).__name__}") from e
     return {"ok": True, "pitch": message, "lead_id": lead_id}
 
 
 @router.get("/analytics")
 async def analytics(r: Request):
-    """Return the canonical analytics payload plus flat aliases for the UI.
-
-    The database remains the source of truth. The flat aliases make the HTTP
-    contract explicit and prevent frontend consumers from guessing whether
-    totals are nested or top-level.
-    """
     payload = await db(r).analytics()
     totals = payload.get("totals") or {}
     return {
@@ -224,39 +237,34 @@ async def outreach(r: Request):
     for deal in deals:
         stage = deal.get("stage") or "READY"
         counts[stage] = counts.get(stage, 0) + 1
-        lead = await d.get_lead(int(deal["business_id"]))
-        if lead:
-            deal.update(
-                {
-                    "name": lead.get("name"),
-                    "city": lead.get("city"),
-                    "industry": lead.get("industry"),
-                    "website": lead.get("website"),
-                    "phone": lead.get("phone"),
-                    "email": lead.get("email"),
-                }
-            )
+        business_id = int(deal.get("business_id") or 0)
+        if business_id:
+            lead = await d.get_lead(business_id)
+            if lead:
+                deal.update(
+                    {
+                        "name": lead.get("name"),
+                        "city": lead.get("city"),
+                        "industry": lead.get("industry"),
+                        "website": lead.get("website"),
+                        "phone": lead.get("phone"),
+                        "email": lead.get("email"),
+                    }
+                )
         enriched.append(deal)
 
-    return {
-        "ok": True,
-        "counts": counts,
-        "items": enriched,
-        "followups": followups,
-    }
+    return {"ok": True, "counts": counts, "items": enriched, "followups": followups}
 
 
 @router.post("/outreach/{lead_id}")
-async def save_outreach(
-    lead_id: int, req: OutreachRequest, r: Request
-):
+async def save_outreach(lead_id: int, req: OutreachRequest, r: Request):
+    if lead_id <= 0:
+        raise HTTPException(422, "Invalid lead ID")
     d = db(r)
     lead = await d.get_lead(lead_id)
     if not lead:
         raise HTTPException(404, "Lead not found")
-    did = await d.upsert_deal(
-        lead_id, req.value, req.services, req.stage, req.notes
-    )
+    did = await d.upsert_deal(lead_id, req.value, req.services, req.stage, req.notes)
     if not did:
         raise HTTPException(500, "Could not save outreach opportunity")
     return {"ok": True, "deal_id": did, "lead_id": lead_id}
