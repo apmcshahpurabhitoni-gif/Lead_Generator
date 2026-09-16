@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -58,9 +59,8 @@ def request_with_db():
     return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(db=FakeDB())))
 
 
-@pytest.mark.asyncio
-async def test_analytics_exposes_flat_ui_contract(request_with_db):
-    result = await analytics(request_with_db)
+def test_analytics_exposes_flat_ui_contract(request_with_db):
+    result = asyncio.run(analytics(request_with_db))
     assert result["leads"] == 12
     assert result["qualified"] == 5
     assert result["hot"] == 2
@@ -68,16 +68,14 @@ async def test_analytics_exposes_flat_ui_contract(request_with_db):
     assert result["cities"][0]["name"] == "Indore"
 
 
-@pytest.mark.asyncio
-async def test_invalid_dataset_is_not_silently_treated_as_empty(request_with_db):
+def test_invalid_dataset_is_not_silently_treated_as_empty(request_with_db):
     with pytest.raises(Exception) as exc:
-        await dataset_leads(999, request_with_db)
+        asyncio.run(dataset_leads(999, request_with_db))
     assert getattr(exc.value, "status_code", None) == 404
 
 
-@pytest.mark.asyncio
-async def test_outreach_returns_real_lead_context(request_with_db):
-    result = await outreach(request_with_db)
+def test_outreach_returns_real_lead_context(request_with_db):
+    result = asyncio.run(outreach(request_with_db))
     item = result["items"][0]
     assert item["business_id"] == 7
     assert item["name"] == "Acme Dental"
