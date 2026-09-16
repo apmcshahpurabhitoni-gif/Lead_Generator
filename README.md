@@ -1,13 +1,21 @@
-# LeadHunter v4.3.0
+# LeadHunter v4.3.1
 
 Local Business Discovery & Intelligence Platform.
 
 ## Dashboard
 Open `/dashboard`. No login or password is required.
 
-The dashboard displays v4.3.0 and uses four themes: Light Modern, Dark Modern, Light Neo and Dark Neo.
+The dashboard is dataset-first: choose a business type and city, run discovery, select a completed dataset, and its lead records load directly without typing internal IDs. Lead cards are collapsed by default and expand to show the available business record and actions.
 
-The dashboard workflow is dataset-first: choose a business type and city, run discovery, select a completed dataset, and its lead records load directly without typing internal IDs. Lead cards are collapsed by default and expand to show the available business record and actions.
+Four locked visual themes are retained: Light Modern, Dark Modern, Light Neo and Dark Neo.
+
+## Runtime wiring
+- Dashboard UI calls the real `/dashboard/api/*` contract.
+- Dataset selection resolves through `/dashboard/api/datasets/{id}/leads`.
+- Lead actions resolve through `/dashboard/api/leads/{id}` and its research/pitch endpoints.
+- Act/Outreach resolves saved opportunities back to the first-class lead record.
+- Telegram uses `/telegram/webhook`; startup registers the webhook against `WEBHOOK_BASE_URL` and verifies requests with `TELEGRAM_WEBHOOK_SECRET`.
+- Application shutdown removes the Telegram webhook cleanly.
 
 ## Research Data States
 - 🟢 AVAILABLE — verified data is available.
@@ -34,6 +42,7 @@ Dashboard / Telegram → FastAPI → Database → Discovery → Research Worker 
 ## Configuration
 See `.env.example`.
 Required: `SUPABASE_URL` and `SUPABASE_KEY`.
+Telegram webhook runtime additionally requires `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET` and `WEBHOOK_BASE_URL`.
 
 Research Worker is optional. Discovery and dashboard continue to work without it; worker-backed intelligence is shown as NOT_CONFIGURED.
 
@@ -43,5 +52,5 @@ uvicorn main:app --reload
 pytest -q
 ```
 
-Version: 4.3.0  
+Version: 4.3.1  
 Release date: 2026-09-16
