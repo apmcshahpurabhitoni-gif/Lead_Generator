@@ -1,5 +1,11 @@
 # Changelog
 
+## v4.3.2 — 2026-09-16
+- Added a real dataset dropdown to the Leads workspace so users select datasets instead of typing dataset IDs.
+- Dataset selection now loads through the existing `/api/datasets/{search_id}/leads` contract and keeps the active dataset synchronized with the lead list.
+- Added compact responsive styling for the dataset selector without changing the locked visual theme system.
+- Preserved the direct Act → Lead path and removed the dataset-loading race from that flow.
+
 ## v4.3.1 — 2026-09-16
 - Registered the Telegram webhook during application startup using `WEBHOOK_BASE_URL` and the configured secret token.
 - Added safe Telegram webhook cleanup on application shutdown.
