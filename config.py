@@ -1,15 +1,14 @@
 import os
 
-APP_VERSION = "4.3.0"
+APP_VERSION = "4.3.1"
 RELEASE_DATE = "2026-09-16"
 WHATS_NEW = [
-    "🧭 Dataset-first dashboard workflow with real API-backed lead loading",
-    "🔗 Direct lead opening from Act without guessing a dataset ID",
-    "📊 Analytics cards now consume the canonical totals contract",
-    "🧩 Outreach records include real lead name, city, industry and contact context",
-    "🛡️ Invalid dataset IDs return explicit 404s instead of silent empty states",
-    "🧪 Added dashboard API contract regression coverage",
-    "🎨 Four persistent dashboard themes retained and isolated from backend logic",
+    "🔌 Telegram webhook is now registered and verified during application startup",
+    "🧹 Telegram webhook lifecycle is cleaned up safely on shutdown",
+    "🧭 Direct Act → Lead navigation no longer races dataset loading",
+    "🛡️ Dashboard IDs and query limits are validated at the API boundary",
+    "📦 Outreach request validation now uses safe defaults and bounded notes",
+    "🧪 JavaScript syntax coverage now includes the runtime adapter as well as the embedded dashboard",
 ]
 ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
 
