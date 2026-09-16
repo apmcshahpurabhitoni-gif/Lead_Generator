@@ -9,8 +9,6 @@ DASHBOARD_RUNTIME_FIX = r'''<script>
 (function () {
   "use strict";
 
-  // Analytics: the API exposes canonical nested totals and flat compatibility
-  // aliases. Read the canonical object first so this remains resilient.
   window.loadAnalytics = async function loadAnalytics() {
     try {
       const x = await api('/analytics');
@@ -27,8 +25,6 @@ DASHBOARD_RUNTIME_FIX = r'''<script>
     }
   };
 
-  // Direct lead opening: Act must never guess a dataset ID. A lead is a
-  // first-class entity and already has a dedicated API endpoint.
   window.openLeadDirect = async function openLeadDirect(leadId) {
     const id = Number(leadId);
     if (!Number.isInteger(id) || id <= 0) {
@@ -39,9 +35,18 @@ DASHBOARD_RUNTIME_FIX = r'''<script>
       const x = await api('/leads/' + id);
       const lead = x.item;
       if (!lead) throw new Error('Lead not found');
+
+      // Do not call go('leads') here: go() also starts dataset loading, which
+      // can race this direct-lead render and replace the selected lead.
+      document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+      document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+      document.getElementById('leads')?.classList.add('active');
+      document.querySelector('.nav-btn[data-page="leads"]')?.classList.add('active');
+      $('crumb').innerHTML = '<strong>Leads</strong> <span>›</span> Direct lead';
+      if (typeof closeSidebar === 'function') closeSidebar();
+
       selectedDataset = null;
       allLeads = [lead];
-      go('leads');
       $('leadTitle').textContent = nameOf(lead);
       $('leadMeta').textContent = (cityOf(lead) || 'Unknown location') + ' · direct lead view';
       $('leadList').innerHTML = leadCard(lead, 0);
@@ -51,7 +56,6 @@ DASHBOARD_RUNTIME_FIX = r'''<script>
     }
   };
 
-  // Outreach: render actual lead context and use direct lead navigation.
   window.loadOutreach = async function loadOutreach() {
     loading('outreachList', 'Loading outreach…');
     try {
@@ -90,13 +94,16 @@ DASHBOARD_RUNTIME_FIX = r'''<script>
     }
   };
 
-  // Research action: keep the lead open after the result arrives and expose
-  // the real score/priority instead of silently replacing the card state.
   window.researchLead = async function researchLead(id) {
+    const numericId = Number(id);
+    if (!Number.isInteger(numericId) || numericId <= 0) {
+      toast('This lead has no valid ID');
+      return;
+    }
     try {
       toast('Researching lead…');
-      const x = await api('/leads/' + Number(id) + '/research', { method: 'POST' });
-      const lead = allLeads.find(v => Number(v.id ?? v.lead_id) === Number(id));
+      const x = await api('/leads/' + numericId + '/research', { method: 'POST' });
+      const lead = allLeads.find(v => Number(v.id ?? v.lead_id) === numericId);
       if (lead) {
         lead.research = x.research || {};
         lead.score = x.score?.score ?? lead.score;
@@ -104,7 +111,7 @@ DASHBOARD_RUNTIME_FIX = r'''<script>
         lead.status = Number(x.score?.score ?? 0) >= 60 ? 'QUALIFIED' : 'RESEARCHED';
       }
       renderLeads();
-      document.getElementById('lead-' + CSS.escape(String(id)))?.classList.add('open');
+      document.getElementById('lead-' + CSS.escape(String(numericId)))?.classList.add('open');
       toast('Research complete');
     } catch (e) {
       toast(e.message || 'Research failed');
