@@ -1,3 +1,4 @@
+import logging
 import os
 from datetime import date, datetime, timezone
 import re
@@ -6,6 +7,29 @@ from typing import Any
 from constants import PIPELINE_STATUSES, STATUS_RANK
 from identity import domain, identity_key as canonical_identity_key, norm
 from supabase import Client, create_client
+
+log = logging.getLogger(__name__)
+
+# Cached per process: live table columns from the PostgREST OpenAPI spec.
+_columns_cache: dict[str, frozenset[str] | None] = {}
+
+
+def filter_row_to_columns(
+    row: dict[str, Any], columns: frozenset[str] | None
+) -> list[str]:
+    """Drop keys that are not real columns of the live table.
+
+    Prevents PGRST204 ("Could not find the '<col>' column") from schema
+    drift between the app and the database. Returns the dropped keys so
+    callers can log them. When columns is None (introspection unavailable)
+    the row is written as-is, preserving legacy behaviour.
+    """
+    if columns is None:
+        return []
+    dropped = [k for k in row if k not in columns]
+    for k in dropped:
+        row.pop(k, None)
+    return dropped
 
 
 def supabase_url() -> str:
@@ -71,6 +95,40 @@ class Database:
     def identity_key(name: str, city: str, website: str | None, **kwargs: Any) -> str:
         return canonical_identity_key(name, city, website, **kwargs)
 
+    async def _table_columns(self, table: str) -> frozenset[str] | None:
+        """Best-effort live column introspection via the PostgREST spec.
+
+        Returns None when unavailable (offline, restricted key) so callers
+        fall back to writing the full row. Cached per process.
+        """
+        if table in _columns_cache:
+            return _columns_cache[table]
+        try:
+            import httpx
+
+            url, key = supabase_credentials()
+            async with httpx.AsyncClient(timeout=10) as client:
+                r = await client.get(
+                    f"{url}/rest/v1/",
+                    headers={"apikey": key, "Authorization": f"Bearer {key}"},
+                )
+                r.raise_for_status()
+                props = (
+                    (r.json().get("definitions", {}) or {})
+                    .get(table, {})
+                    .get("properties", {})
+                )
+            columns: frozenset[str] | None = frozenset(props)
+        except Exception as e:
+            log.warning("table introspection unavailable for %s: %s", table, e)
+            columns = None
+        _columns_cache[table] = columns
+        return columns
+
+    async def _has_column(self, table: str, column: str) -> bool:
+        cols = await self._table_columns(table)
+        return cols is None or column in cols
+
     async def upsert_business(self, business: dict[str, Any]) -> tuple[int | None, bool]:
         identity = business.get("identity_key") or canonical_identity_key(
             business.get("name"),
@@ -114,7 +172,9 @@ class Database:
                 .execute()
             )
             old = r.data[0] if r.data else None
-        if not old and phone_digits:
+        if not old and phone_digits and (
+            await self._has_column("businesses", "normalized_phone")
+        ):
             r = (
                 self.client.table("businesses")
                 .select("*")
@@ -157,6 +217,16 @@ class Database:
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
         )
+
+        # Schema drift guard: never send columns the live table lacks.
+        cols = await self._table_columns("businesses")
+        dropped = filter_row_to_columns(row, cols)
+        if dropped:
+            log.warning(
+                "businesses schema drift: skipped missing columns %s "
+                "(run migrations/004_business_schema_parity.sql for parity)",
+                dropped,
+            )
 
         if old:
             for key in fields:

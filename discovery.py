@@ -476,7 +476,9 @@ async def _city_area(city: str) -> tuple[int, str]:
             params={
                 "q": f"{city}, India",
                 "format": "jsonv2",
-                "limit": 1,
+                # Ask for several candidates: Nominatim often ranks a
+                # postal-code node above the city boundary we need.
+                "limit": 5,
                 "countrycodes": "in",
             },
             timeout=15,
@@ -487,18 +489,25 @@ async def _city_area(city: str) -> tuple[int, str]:
     if not rows:
         raise RuntimeError(f"Could not locate city in India: {city}")
 
-    row = rows[0]
-    osm_type = row.get("osm_type")
-    osm_id = int(row["osm_id"])
-
-    if osm_type == "relation":
-        area_id = 3600000000 + osm_id
-    elif osm_type == "way":
-        area_id = 2400000000 + osm_id
-    else:
+    # Nominatim often ranks a postal-code node above the real administrative
+    # boundary (e.g. Bhopal, Gwalior). A node cannot become an Overpass area,
+    # so prefer the first relation/way boundary in the result list.
+    row = next(
+        (r for r in rows if r.get("osm_type") in ("relation", "way")),
+        None,
+    )
+    if row is None:
         raise RuntimeError(
             f"City '{city}' did not resolve to an OSM area"
         )
+
+    osm_type = row.get("osm_type")
+    osm_id = int(row["osm_id"])
+    area_id = (
+        3600000000 + osm_id
+        if osm_type == "relation"
+        else 2400000000 + osm_id
+    )
 
     result = (area_id, row.get("display_name", city))
     _city_cache[key] = result

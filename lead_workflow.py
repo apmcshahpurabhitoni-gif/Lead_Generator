@@ -9,9 +9,16 @@ log=logging.getLogger(__name__)
 async def process_candidates(db,job_id,candidates,industry,city):
  saved=failed=0
  for candidate in candidates:
+  candidate["requested_industry"]=industry;candidate["requested_city"]=city
+  # Research enrichment is optional by contract (discovery works without the
+  # worker). A worker outage must not drop the discovered lead — save it with
+  # partial research; it can be enriched later via the per-lead Research action.
   try:
-   candidate["requested_industry"]=industry;candidate["requested_city"]=city
    raw=await research_business(candidate)
+  except Exception as e:
+   raw={}
+   log.warning("research unavailable for '%s' | city=%s | %s: %s",candidate.get("name"),city,type(e).__name__,str(e)[:200])
+  try:
    research=normalize_research(candidate,raw)
    score=score_lead(research);research["score_breakdown"]=score.get("breakdown",[])
    bid,_=await db.upsert_business(candidate)

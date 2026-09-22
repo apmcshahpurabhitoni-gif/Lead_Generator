@@ -121,3 +121,50 @@ def test_dashboards_serve_html_from_the_same_app():
         response = client.get(path)
         assert response.status_code == 200
         assert "text/html" in response.headers["content-type"]
+
+
+def test_empty_done_dataset_is_not_reused_for_new_discovery(monkeypatch):
+    """A DONE job that saved zero leads must not poison future discovery."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from dashboard_ui import api as dashboard_api
+
+    async def fake_run_discovery(job_id, city, industry, limit):
+        return
+
+    monkeypatch.setattr(dashboard_api, "run_discovery_job", fake_run_discovery)
+
+    created: dict[str, tuple[str, str, str]] = {}
+
+    class EmptyDatasetDB(FakeDB):
+        async def list_searches(self, limit: int = 100, **_: Any) -> list[dict[str, Any]]:
+            return [
+                {
+                    "id": 34,
+                    "city": "Bhopal",
+                    "industry": "dental",
+                    "status": "DONE",
+                }
+            ]
+
+        async def list_search_results(
+            self, search_id: int, limit: int = 1
+        ) -> list[dict[str, Any]]:
+            return []  # dataset exists but saved no leads
+
+        async def create_job(
+            self, job_type: str, city: str, industry: str
+        ) -> int | None:
+            created["job"] = (job_type, city, industry)
+            return 99
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(db=EmptyDatasetDB()))
+    )
+    payload = dashboard_api.SearchRequest(
+        category="dental", city="Bhopal", max_results=5, refresh=False
+    )
+    result = asyncio.run(dashboard_api.discover(payload, request))
+    assert result["reused"] is False
+    assert created["job"] == ("DISCOVERY", "Bhopal", "dental")

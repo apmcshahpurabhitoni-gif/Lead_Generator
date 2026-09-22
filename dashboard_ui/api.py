@@ -12,6 +12,10 @@ from scoring import score_lead
 
 router = APIRouter()
 
+# Keep strong references to fire-and-forget discovery tasks so they are not
+# garbage-collected mid-run (errors are logged by the workflow itself).
+_background_tasks: set[asyncio.Task] = set()
+
 
 class SearchRequest(BaseModel):
     category: str = Field(min_length=1, max_length=100)
@@ -94,6 +98,16 @@ async def discover(req: SearchRequest, r: Request):
         ),
         None,
     )
+    # A DONE job that saved zero leads (e.g. every candidate failed) must not
+    # be reused — otherwise discovery for that city+category is permanently
+    # poisoned by an empty dataset.
+    if match:
+        try:
+            saved = await d.list_search_results(match["id"], limit=1)
+            if not saved:
+                match = None
+        except Exception:
+            pass
     if match and not req.refresh:
         return {
             "ok": True,
@@ -107,7 +121,11 @@ async def discover(req: SearchRequest, r: Request):
     if not job_id:
         raise HTTPException(500, "Could not create discovery job")
 
-    asyncio.create_task(run_discovery_job(job_id, city, industry, req.max_results))
+    task = asyncio.create_task(
+        run_discovery_job(job_id, city, industry, req.max_results)
+    )
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
     return {
         "ok": True,
         "job_id": job_id,
