@@ -1,5 +1,18 @@
 # Changelog
 
+## v4.4.0 — 2026-09-22
+- Added a dedicated mobile-first dashboard at `/m` (also `/dashboard/m`) built on the same public `/dashboard/api/*` contract — no new or invented endpoints.
+- Mobile Home tab shows live metric tiles, recent datasets, quick actions and service health.
+- Mobile Leads tab adds swipeable dataset chips, instant lead search, All/Hot/Researched filters and a tap-to-open bottom sheet per lead.
+- Lead sheets expose native mobile actions: Call (tel:), WhatsApp (wa.me with prefilled message), Email (mailto:) and Website, plus Research, Pitch and Save-to-Act.
+- Mobile Find tab runs the full discovery flow with a live progress bar and dataset auto-selection on completion.
+- Mobile Stats and Act tabs mirror desktop analytics and the outreach pipeline, including due follow-ups.
+- The mobile UI reuses the locked four-theme system (Light/Dark × Modern/Neo) via the shared `lh-theme` preference and cycles themes from its app bar.
+- Desktop topbar gained a 📱 button that opens the mobile dashboard; the mobile app bar links back to `/dashboard`.
+- Fixed a pre-existing JavaScript syntax error (extra brace in `pollJob`) that broke all desktop dashboard scripting at runtime.
+- Repaired the corrupted `tests/test_research_schema.py` fixture and refreshed stale wiring tests to match the current auth-free, single-root runtime.
+- Extended dashboard JavaScript syntax regression coverage to the mobile template and added `tests/test_mobile_dashboard.py` covering routes, contract exclusivity, interactions, theming and states.
+
 ## v4.3.2 — 2026-09-16
 - Added a real dataset dropdown to the Leads workspace so users select datasets instead of typing dataset IDs.
 - Dataset selection now loads through the existing `/api/datasets/{search_id}/leads` contract and keeps the active dataset synchronized with the lead list.

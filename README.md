@@ -1,11 +1,29 @@
-# LeadHunter v4.3.2
+# LeadHunter v4.4.0
 
 Local Business Discovery & Intelligence Platform.
 
 ## Dashboard
 Open `/dashboard`. No login or password is required.
 
-The dashboard is dataset-first: choose a business type and city, run discovery, then use the Leads workspace dataset dropdown to select a completed dataset. Its lead records load directly without typing internal IDs. Lead cards are collapsed by default and expand to show the available business record and actions.
+## Mobile Dashboard
+Open `/m` (also at `/dashboard/m`) for the mobile-first experience. It is a
+two-thumb, app-like workspace over the exact same `/dashboard/api/*` contract:
+
+- **Home** — live metric tiles, recent datasets, one-tap access to Find and Act, service health.
+- **Leads** — swipeable dataset chips, instant search, All/Hot/Researched filters, tap-to-open lead bottom sheet with Call / WhatsApp / Email / Website actions plus Research, Pitch and Save-to-Act.
+- **Find** — business type, city and lead-count pickers with a live discovery progress bar.
+- **Stats** — lead totals and city/service bar charts.
+- **Act** — saved opportunities and due follow-ups, each opening its lead directly.
+
+The mobile dashboard shares the desktop's four locked themes
+(Light Modern, Dark Modern, Light Neo, Dark Neo) and remembers the choice.
+A 📱 button on the desktop topbar jumps to `/m`; the mobile app bar links back.
+
+The desktop dashboard is dataset-first: choose a business type and city, run
+discovery, then use the Leads workspace dataset dropdown to select a completed
+dataset. Its lead records load directly without typing internal IDs. Lead
+cards are collapsed by default and expand to show the available business
+record and actions.
 
 Four locked visual themes are retained: Light Modern, Dark Modern, Light Neo and Dark Neo.
 
@@ -42,7 +60,9 @@ Dashboard / Telegram → FastAPI → Database → Discovery → Research Worker 
 
 ## Configuration
 See `.env.example`.
-Required: `SUPABASE_URL` and `SUPABASE_KEY`.
+Required (Keys tab): `SUPABASE_URL` plus one Supabase API key —
+`SUPABASE_SERVICE_ROLE_KEY` (recommended, server-side) or `SUPABASE_ANON_KEY`.
+The legacy `SUPABASE_KEY` alias is still accepted.
 Telegram webhook runtime additionally requires `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET` and `WEBHOOK_BASE_URL`.
 
 Research Worker is optional. Discovery and dashboard continue to work without it; worker-backed intelligence is shown as NOT_CONFIGURED.
@@ -53,5 +73,5 @@ uvicorn main:app --reload
 pytest -q
 ```
 
-Version: 4.3.2  
-Release date: 2026-09-16
+Version: 4.4.0  
+Release date: 2026-09-22
