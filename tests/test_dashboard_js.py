@@ -18,7 +18,8 @@ def test_dashboard_javascript_syntax():
     root = Path(__file__).resolve().parents[1]
     template = (root / "dashboard_ui" / "templates.py").read_text()
     runtime = (root / "dashboard_ui" / "runtime_fix.py").read_text()
-    scripts = _scripts(template) + _scripts(runtime)
+    mobile = (root / "dashboard_ui" / "mobile.py").read_text()
+    scripts = _scripts(template) + _scripts(runtime) + _scripts(mobile)
     assert scripts, "No dashboard JavaScript blocks found"
 
     for index, script in enumerate(scripts):

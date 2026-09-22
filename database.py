@@ -8,13 +8,56 @@ from identity import domain, identity_key as canonical_identity_key, norm
 from supabase import Client, create_client
 
 
+def supabase_url() -> str:
+    """Resolve the Supabase project URL from any canonical variable name."""
+    for name in ("SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_URL"):
+        value = os.getenv(name, "").strip().rstrip("/")
+        if value:
+            return value
+    raise RuntimeError(
+        "SUPABASE_URL is required (set it in the Keys tab / environment)"
+    )
+
+
+def supabase_project_ref(url: str | None = None) -> str | None:
+    """Extract the project ref (xxxxx.supabase.co) for diagnostics."""
+    try:
+        host = (url or supabase_url()).split("//")[-1].split("/")[0]
+    except RuntimeError:
+        return None
+    if host.endswith(".supabase.co"):
+        return host[: -len(".supabase.co")]
+    return None
+
+
+def supabase_credentials() -> tuple[str, str]:
+    """Resolve (url, api_key) accepting every canonical Supabase key name.
+
+    Canonical names: SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY.
+    Legacy alias kept for backwards compatibility: SUPABASE_KEY.
+    Precedence: service role > anon > legacy alias (service role is the
+    server-side key and is required for writes that bypass row level
+    security).
+    """
+    for name in (
+        "SUPABASE_SERVICE_ROLE_KEY",
+        "SUPABASE_ANON_KEY",
+        "SUPABASE_KEY",
+    ):
+        value = os.getenv(name, "").strip()
+        if value:
+            return supabase_url(), value
+    raise RuntimeError(
+        "A Supabase API key is required: set SUPABASE_SERVICE_ROLE_KEY "
+        "or SUPABASE_ANON_KEY (or legacy SUPABASE_KEY)"
+    )
+
+
 class Database:
     def __init__(self) -> None:
-        url = os.getenv("SUPABASE_URL", "").strip()
-        key = os.getenv("SUPABASE_KEY", "").strip()
-        if not url or not key:
-            raise RuntimeError("SUPABASE_URL and SUPABASE_KEY are required")
+        url, key = supabase_credentials()
         self.client: Client = create_client(url, key)
+        self.supabase_project_ref = supabase_project_ref(url)
 
     @staticmethod
     def _norm(value: str | None) -> str:

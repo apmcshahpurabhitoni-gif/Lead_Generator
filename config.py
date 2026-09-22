@@ -1,16 +1,16 @@
 import os
 
-APP_VERSION = "4.3.2"
-RELEASE_DATE = "2026-09-16"
+APP_VERSION = "4.4.0"
+RELEASE_DATE = "2026-09-22"
 WHATS_NEW = [
-    "🔌 Telegram webhook is now registered and verified during application startup",
-    "🧹 Telegram webhook lifecycle is cleaned up safely on shutdown",
-    "🧭 Direct Act → Lead navigation no longer races dataset loading",
-    "🛡️ Dashboard IDs and query limits are validated at the API boundary",
-    "📦 Outreach request validation now uses safe defaults and bounded notes",
-    "🧪 JavaScript syntax coverage now includes the runtime adapter as well as the embedded dashboard",
-    "🎛️ Leads now use a real dataset dropdown instead of requiring manual dataset IDs",
-    "📚 Dataset selection keeps the selected lead list synchronized with the active dataset",
+    "📱 New mobile dashboard at /m — a pocket-sized LeadHunter workspace",
+    "🏠 Mobile Home with live metrics, recent datasets and service health",
+    "▤ Leads tab: dataset chips, search, filters and tap-to-open lead sheets",
+    "📞 One-tap Call / WhatsApp / Email / Website actions on every lead",
+    "⌕ Research, Pitch and Save-to-Act actions run right from the sheet",
+    "⌕ Full discovery flow with live job progress on mobile",
+    "◫ Stats tab with lead totals and city/service charts",
+    "◐ Same four-theme system: Light/Dark × Modern/Neo, remembered locally",
 ]
 ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
 

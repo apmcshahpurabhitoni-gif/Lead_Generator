@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse
 
 from config import APP_VERSION
 from dashboard_ui.api import router as api_router
+from dashboard_ui.mobile import MOBILE_HTML
 from dashboard_ui.runtime_fix import DASHBOARD_RUNTIME_FIX
 from dashboard_ui.templates import DASHBOARD_HTML
 
@@ -23,3 +24,10 @@ router.include_router(api_router, prefix="/api")
 @router.get("/dashboard/", include_in_schema=False)
 async def dashboard(request: Request):
     return HTMLResponse(DASHBOARD_HTML + DASHBOARD_RUNTIME_FIX)
+
+
+@router.get("/dashboard/m", include_in_schema=False)
+@router.get("/m", include_in_schema=False)
+async def dashboard_mobile(request: Request):
+    """Mobile-first dashboard over the same /dashboard/api contract."""
+    return HTMLResponse(MOBILE_HTML)

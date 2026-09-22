@@ -7,7 +7,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from bot import create_application, notify_bot_started
 from config import APP_VERSION, RELEASE_DATE, WHATS_NEW
 from dashboard import router as dashboard_router
-from database import Database
+from database import Database, supabase_credentials
 from research_client import worker_status
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
@@ -15,9 +15,10 @@ log = logging.getLogger("leadhunter")
 
 
 def validate_configuration():
-    missing = [x for x in ("SUPABASE_URL", "SUPABASE_KEY") if not os.getenv(x, "").strip()]
-    if missing:
-        raise RuntimeError("Missing required environment variables: " + ", ".join(missing))
+    try:
+        supabase_credentials()
+    except RuntimeError as e:
+        raise RuntimeError(f"Missing required environment variables: {e}") from e
 
 
 @asynccontextmanager
