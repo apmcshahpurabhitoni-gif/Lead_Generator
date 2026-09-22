@@ -17,7 +17,9 @@ from dashboard_ui.templates import DASHBOARD_HTML
 __APP_VERSION__ = APP_VERSION
 
 router = APIRouter()
-router.include_router(api_router, prefix="/api")
+# The dashboard UI fetches /dashboard/api/* — this prefix is the public
+# contract documented in the README and asserted by the UI templates.
+router.include_router(api_router, prefix="/dashboard/api")
 
 
 @router.get("/dashboard", include_in_schema=False)
